@@ -174,7 +174,7 @@ Fibers that are not finished (do not complete execution) are destroyed similarly
 
 #### Fiber Stacks
 
-Each fiber is allocated a separate C stack and VM stack. The stack is allocated using `mmap` if available, meaning memory is consumed only if it is allocated on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with a ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
+Each fiber is allocated a separate C stack and VM stack. The stack is allocated using `mmap` if available, meaning physical memory is used only on demand (if it needs to be allocated to a stack value) on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with a ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
 
 ## FAQ
 
@@ -258,7 +258,7 @@ Implementation and tests at [amphp/ext-fiber](https://github.com/amphp/ext-fiber
 
 ## Examples
 
-The example below uses a [simple implemenation of a `FiberScheduler`](https://github.com/amphp/ext-fiber/blob/395bf3f66805d0d41363c82be142698093ff3348/scripts/Loop.php) to delay execution of a function for 1000 milliseconds. The funciton is scheduled when the fiber is suspended with `Fiber::suspend()`. When this function is invoked, the fiber is resumed with the value given to `Continuation::resume()`.
+The example below uses a [simple implemenation of a `FiberScheduler`](https://github.com/amphp/ext-fiber/blob/395bf3f66805d0d41363c82be142698093ff3348/scripts/Loop.php) to delay execution of a function for 1000 milliseconds. The function is scheduled when the fiber is suspended with `Fiber::suspend()`. When this function is invoked, the fiber is resumed with the value given to `Continuation::resume()`.
 
 ``` php
 $loop = new Loop;
