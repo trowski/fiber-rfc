@@ -7,30 +7,29 @@
 
 ## Introduction 
 
-For a long time since PHP was created, most people have written PHP as synchronous code. They have code that runs synchronously and in turn, only calls functions that run synchronously.
+For most of PHP's history, people have written PHP code only as synchronous code. They have code that runs synchronously and in turn, only calls functions that run synchronously. Synchronous functions stop execution until a result is available to return from the function.
 
-More recently, there have been multiple projects that have allowed people to write asynchronous PHP code. That is code that can be called asynchronously, and can call functions that either run synchronously or asynchronously. Examples of these projects are [AMPHP](https://amphp.org/), [ReactPHP](https://reactphp.org/), and [Guzzle](https://guzzlephp.org/).
+More recently, there have been multiple projects that have allowed people to write asynchronous PHP code.  Asynchronous functions accept a callback or return a placeholder for a future value (such as a promise) to run code at a future time once the result is available. Execution continues without waiting for a result. Examples of these projects are [AMPHP](https://amphp.org/), [ReactPHP](https://reactphp.org/), and [Guzzle](https://guzzlephp.org/).
 
 The problem this RFC seeks to address is a difficult one to explain, but can be referred to as the ["What color is your function?"](https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/) problem. That link contains a detailed explanation of the problem.
 
-A summary is that:
+A summary of the problem described in the linked article is:
 
-* Asynchronous functions need to be called in a special way.
-* It's easier to call synchronous functions.
-* All PHP core functions are synchronous.
-* If there is any asynchronous code in the call stack, then any call to a synchronous function 'breaks' the asynchronous code.
+* Asynchronous functions change the way the function must be called.
+* Synchronous functions may not call an asynchronous function (though asynchronous functions may call synchronous functions).
+* Calling an asynchronous function requires the entire callstack to be asynchronous
 
-For people who are familiar with using promises and await to achieve writing asynchronous code, it can be expressed as; once one function returns a promise somewhere in your call stack, the entire call stack needs to return a promise because the result of the call cannot be known until the promise is resolved.
+For people who are familiar with using promises and await/yield to achieve writing asynchronous code, the problem can be expressed as: "Once one function returns a promise somewhere in your call stack, the entire call stack needs to return a promise because the result of the call cannot be known until the promise is resolved."
 
-This RFC seeks to solve this problem by allowing functions to be interruptible without polluting the entire call stack. This would be achieved by:
+This RFC seeks to eliminate the distiction between synchronous and asynchronous functions by allowing functions to be interruptible without polluting the entire call stack. This would be achieved by:
 
- * adding support for [Fibers](https://en.wikipedia.org/wiki/Fiber_(computer_science)) to PHP
- * adding `Fiber` and `Continuation` classes, and an interface `FiberScheduler`
- * adding exception classes `FiberError` and `FiberExit` to represent errors
+ * Adding support for [Fibers](https://en.wikipedia.org/wiki/Fiber_(computer_science)) to PHP.
+ * Adding `Fiber` and `Continuation` classes, and an interface `FiberScheduler`.
+ * Adding exception classes `FiberError` and `FiberExit` to represent errors.
 
 ### Definition of terms
 
-To allow better understanding of the RFC, this section defines what the names Fibers, Continuation, and FiberScheduler mean for the RFC being proposed.
+To allow better understanding of the RFC, this section defines what the names Fiber, Continuation, and FiberScheduler mean for the RFC being proposed.
 
 #### Fibers
 
@@ -163,6 +162,8 @@ When an instance of `FiberScheduler` is provided to `Fiber::suspend()` for the f
 
 A fiber *must* be resumed from the fiber created from the instance of `FiberScheduler` provided to `Fiber::suspend()`. Doing otherwise results in a fatal error. In practice this means that calling `Continuation::resume()` or `Continuation::throw()` must be within a callback registered to an event handled within a `FiberScheduler` instance. Often it is desirable to ensure resumption of a fiber is asynchronous, making it easier to reason about program state before and after an event would resume a fiber.
 
+When a script ends, each fiber scheduler used in the a script is resumed and allowed to run to completion to complete unfinished tasks or free resources.
+
 This RFC does not include an implementation for `FiberScheduler`. Instead, it proposes only defining an interface and any implementation would be done in user code (see [Future Scope](#future-scope)).
 
 #### Unfinished Fibers
@@ -220,6 +221,12 @@ A `FiberScheduler` is like any other PHP class implementing an interface. The `r
 #### How does blocking code affect fibers
 
 Blocking code (such as `file_get_contents()`) will continue to block the entire process, even if other fibers exist. Code must be written to use asynchonous I/O, an event loop, and fibers to see a performance and concurrency benefit. As mentioned in the introduction, several libraries already exist for asynchronous I/O and can take advantage of fibers to integrate with synchronous code while expanding the potential for concurrency in an application.
+
+#### Why add this to PHP core?
+
+Putting this capability directly in PHP core makes it widely available on any host providing PHP. Often users are not able to determine what extensions may be available in a particular hosting environment, are unsure of how to install extensions, or do not want to install 3rd-party extensions. Adding this feature directly to PHP core makes allows it to be used by a wide variety of library authors without concerns of portability.
+
+Further, the extension currently forbids suspending in shutdown functions and destructors executed during shutdown. However, there is no technical reason for this other than the hooks provided by PHP for extensions. Adding the fibers to PHP core would allow the engine to finish executing fiber schedulers after registered shutdown functions are invoked.
 
 ## Backward Incompatible Changes
 
