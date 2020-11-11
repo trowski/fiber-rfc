@@ -45,6 +45,8 @@ The callable may use `Fiber::suspend()` to interrupt execution anywhere in the c
 
 This proposal treats `{main}` as a fiber, allowing `Fiber::suspend()` to be called from the top-level context.
 
+Fibers can be suspended in *any* function call, including those called from within the PHP VM, such as functions provided to `array_map` or methods called by `foreach` on an `Iterator` object.
+
 #### Continuation 
 
 A continuation allows resuming a suspended fiber upon completion of an asynchronous operation.
@@ -174,22 +176,6 @@ Fibers that are not finished (do not complete execution) are destroyed similarly
 
 Each fiber is allocated a separate C stack and VM stack. The stack is allocated using `mmap` if available, meaning memory is consumed only if it is allocated on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with a ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
 
-## Example
-
-The example below uses a [simple implemenation of a `FiberScheduler`](https://github.com/amphp/ext-fiber/blob/395bf3f66805d0d41363c82be142698093ff3348/scripts/Loop.php) to delay execution of a function for 1000 milliseconds. The funciton is scheduled when the fiber is suspended with `Fiber::suspend()`. When this function is invoked, the fiber is resumed with the value given to `Continuation::resume()`.
-
-``` php
-$loop = new Loop;
-
-$value = Fiber::suspend(function (Continuation $continuation) use ($loop): void {
-	$loop->delay(1000, fn() => $continuation->resume(1));
-}, $loop);
-
-var_dump($value); // int(1)
-```
-
-While a contrived example, imagine if the fiber was awaiting data on a network socket or the result of a database query. Combine this with the ability to simultaneously run and suspend many fibers allows a single PHP process to concurrently await many events.
-
 ## FAQ
 
 #### Who is the target audience for this feature?
@@ -269,6 +255,91 @@ Implementation and tests at [amphp/ext-fiber](https://github.com/amphp/ext-fiber
 [AMPHP v3](https://github.com/amphp/amp/tree/v3), a work-in-progress, uses `ext-fiber`. Nearly all libraries under the GitHub organization [amphp](https://github.com/amphp) have branches compatible with AMPHP v3. The branches are labeled as `vX`, where `X` is the current version + 1 (for example, the `v5` branch of [amphp/http-client](https://github.com/amphp/http-client/tree/v5)). See the `examples` directories in various libraries for samples of PHP code using fibers.
 
 [React Fiber](https://github.com/trowski/react-fiber) uses `ext-fiber` to create coroutines and await any instance of `React\Promise\PromiseInterface` until it is resolved.
+
+## Examples
+
+The example below uses a [simple implemenation of a `FiberScheduler`](https://github.com/amphp/ext-fiber/blob/395bf3f66805d0d41363c82be142698093ff3348/scripts/Loop.php) to delay execution of a function for 1000 milliseconds. The funciton is scheduled when the fiber is suspended with `Fiber::suspend()`. When this function is invoked, the fiber is resumed with the value given to `Continuation::resume()`.
+
+``` php
+$loop = new Loop;
+
+$value = Fiber::suspend(function (Continuation $continuation) use ($loop): void {
+	$loop->delay(1000, fn() => $continuation->resume(1));
+}, $loop);
+
+var_dump($value); // int(1)
+```
+
+While a contrived example, imagine if the fiber was awaiting data on a network socket or the result of a database query. Combine this with the ability to simultaneously run and suspend many fibers allows a single PHP process to concurrently await many events.
+
+The next example uses the async framework [AMPHP v3](https://github.com/amphp/amp/tree/v3) mentioned in [Patches and Tests](#patches-and-tests) to demonstrate how fibers may be used by frameworks to create asynchronous that is written like synchronous code. Note that the `Delayed` object is a promise-like object that resolves itself with the second argument after the number of milliseconds given as the first argument. The `await()` function suspends a fiber until the promise is resolved and the `async()` function creates a new fiber, returning a promise that is resolved when the fiber completes, allowing multiple fibers to be executed concurrently.
+
+``` php
+use Amp\Delayed;
+use Amp\Loop;
+use function Amp\async;
+use function Amp\await;
+
+// Note that the closure declares int as a return type, not Promise or Generator, but executes like a coroutine.
+$callback = function (int $id): int {
+    return await(new Delayed(1000, $id)); // Await promise resolution.
+};
+
+$timer = Loop::repeat(100, function (): void {
+    echo ".", PHP_EOL; // This repeat timer is to show the event loop is not being blocked.
+});
+Loop::unreference($timer); // Unreference timer so the loop exits automatically when all tasks complete.
+
+// Invoking $callback returns an int, but is executed asynchronously.
+$result = $callback(1); // Call a subroutine within this green thread, taking 1 second to return.
+\var_dump($result);
+
+// Simultaneously runs two new green threads, await their resolution in this green thread.
+$result = await([  // Executed simultaneously, only 1 second will elapse during this await.
+    async($callback, 2),
+    async($callback, 3),
+]);
+\var_dump($result); // Executed after 2 seconds.
+
+$result = $callback(4); // Call takes 1 second to return.
+\var_dump($result);
+
+// array_map() takes 2 seconds to execute as the calls are not concurrent, but this shows that fibers are
+// supported by internal callbacks.
+$result = \array_map($callback, [5, 6]);
+\var_dump($result);
+```
+
+Since fibers can be paused during calls within the PHP VM, fibers can also be used to create asynchronous iterators. The example below again uses AMPHP v3, creating a `Pipeline`, an iterator-like object that implements `Traversable`, allowing it to be used with `foreach` and `yield from` to iterate over an asynchronous set of values. `PipelineSource` is used to emit values as they are generated. The `foreach` loop will suspend while waiting for another value from the pipeline.
+
+``` php
+use Amp\Delayed;
+use Amp\PipelineSource;
+use function Amp\defer;
+use function Amp\await;
+
+$source = new PipelineSource;
+$pipeline = $source->pipe();
+
+// defer() runs the given function in a separate fiber.
+defer(function (PipelineSource $source): void {
+    $source->yield(await(new Delayed(500, 1)));
+    $source->yield(await(new Delayed(1500, 2)));
+    $source->yield(await(new Delayed(1000, 3)));
+    $source->yield(await(new Delayed(2000, 4)));
+    $source->yield(5);
+    $source->yield(6);
+    $source->yield(7);
+    $source->yield(await(new Delayed(2000, 8)));
+    $source->yield(9);
+    $source->yield(await(new Delayed(1000, 10));
+    $source->complete();
+}, $source);
+
+foreach ($pipeline as $value) {
+    \printf("Pipeline source yielded %d\n", $value);
+}
+```
 
 ## References 
   * [Boost C++ fibers](https://www.boost.org/doc/libs/1_67_0/libs/fiber/doc/html/index.html)
