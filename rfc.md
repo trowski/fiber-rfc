@@ -95,7 +95,7 @@ final class Fiber
 }
 ```
 
-`Fiber::suspend()` accepts a callback that is provided an instance of `Continuation` as the first argument. This object is used to resume the fiber with any value or throw an exception into the fiber. This callback may create events in the fiber scheduler (event loop), add the fiber to a list of pending fibers, or otherwise set up logic that will resume the fiber at a later time from the instance of `FiberScheduler` provided to `Fiber::suspend()`.
+`Fiber::suspend()` accepts a callback that is provided an instance of `Continuation` as the first argument. The `Continuation` object may be used at a later time to resume the fiber with any value or throw an exception into the fiber. The callback is invoked within the running fiber before it is suspended. The callback should create event watchers in the `FiberScheduler` instance (event loop), add the fiber to a list of pending fibers, or otherwise set up logic that will resume the fiber at a later time from the instance of `FiberScheduler` provided to `Fiber::suspend()`.
 
 #### Continuation
 
@@ -135,7 +135,7 @@ final class Continuation
 }
 ```
 
-A continuation is created when suspending a fiber and may be used to resume the suspended fiber in one of two ways:
+A `Continuation` object is created when suspending a fiber and may be used to resume the suspended fiber in one of two ways:
 
  * returning a value from `Fiber::suspend()` using `Continuation::resume()`
  * throwing an exception from `Fiber::suspend()` using `Continuation::throw()`
