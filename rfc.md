@@ -1,6 +1,6 @@
 # PHP RFC: Fibers 
-  * Version: 0.1
-  * Date: 2020-11-11
+
+  * Date: 2020-11-16
   * Author: Aaron Piotrowski <trowski@php.net>
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/fibers
@@ -150,7 +150,8 @@ If the `Continuation` object is destroyed before calling either method, the asso
 interface FiberScheduler
 {
     /**
-     * Run the scheduler.
+     * Run the scheduler, scheduling and responding to events.
+     * This method should not return until no futher pending events remain in the fiber scheduler.
      */
     public function run(): void;
 }
@@ -214,6 +215,14 @@ Putting this capability directly in PHP core makes it widely available on any ho
 
 Further, the extension currently forbids suspending in shutdown functions and destructors executed during shutdown. However, there is no technical reason for this other than the hooks provided by PHP for extensions. Adding the fibers to PHP core would allow the engine to finish executing fiber schedulers after registered shutdown functions are invoked.
 
+#### Why not add an event loop and async/await API to core?
+
+This RFC proposes only the bare minimum required to allow user code to implement full-stack coroutines or green-threads in PHP. There are several frameworks that implement their own event loop API, promises, and other asynchronous APIs. These APIs vary greatly and are opinionated, designed for a particular purpose, and their particular needs may not be able to be covered by a core API that is designed by only a few individuals.
+
+It is the opinion of the author of this RFC that it is best to provide the bare minimum in core and allow user code to implement other components as they desire. If the community moves toward a single event loop API or a need emerges for an event loop in PHP core, this can be done in a future RFC. Providing a core event loop without core functionality using it (such as streams, file access, etc.) would be misleading and confusing for users. Deferring such functionality to user frameworks and providing only a minimum API in core keeps expectations in check.
+
+This RFC does not preclude adding async/await and an event loop to core, see [Future Scope](#future-scope).
+
 ## Backward Incompatible Changes
 
 Declares `Continuation`, `Fiber`, `FiberScheduler`, `FiberError`, and `FiberExit` in the root namespace. No other BC breaks.
@@ -240,7 +249,7 @@ These keywords can be created in user code using the proposed fiber API. [AMPHP 
 
 #### defer keyword 
 
-Fibers may be used to implement a `defer` keyword that executes a statement within a new fiber when the current fiber is suspended or terminates. Such a keyword would also require an internal implementation of `FiberScheduler` and likely would be an addition after async/await keywords.
+Fibers may be used to implement a `defer` keyword that executes a statement within a new fiber when the current fiber is suspended or terminates. Such a keyword would also require an internal implementation of `FiberScheduler` and likely would be an addition after async/await keywords. This behavior differs from `defer` in Go, as PHP is already able to mimick such behavior with `finally` blocks.
 
 This keyword also can be created in user code using the proposed fiber API, an example being [`defer()`](https://github.com/amphp/amp/blob/6d5e0f5ff73a7ffb47243a491fd09b1d57930d23/lib/functions.php#L77-L87) in AMPHP v3.
 
@@ -270,19 +279,89 @@ $value = Fiber::suspend(function (Continuation $continuation) use ($loop): void 
 var_dump($value); // int(1)
 ```
 
-While a contrived example, imagine if the fiber was awaiting data on a network socket or the result of a database query. Combine this with the ability to simultaneously run and suspend many fibers allows a single PHP process to concurrently await many events.
+While a contrived example, imagine if the fiber was awaiting data on a network socket or the result of a database query. Combining this with the ability to simultaneously run and suspend many fibers allows a single PHP process to concurrently await many events.
 
-The next example uses the async framework [AMPHP v3](https://github.com/amphp/amp/tree/v3) mentioned in [Patches and Tests](#patches-and-tests) to demonstrate how fibers may be used by frameworks to create asynchronous that is written like synchronous code. Note that the `Delayed` object is a promise-like object that resolves itself with the second argument after the number of milliseconds given as the first argument. The `await()` function suspends a fiber until the promise is resolved and the `async()` function creates a new fiber, returning a promise that is resolved when the fiber completes, allowing multiple fibers to be executed concurrently.
+The next example creates three new fibers within a callback executed in the `FiberScheduler` instance to execute four timers (three created plus the main thread).
 
 ``` php
-use Amp\Delayed;
+$loop = new Loop;
+
+// Create three new fibers in the FiberScheduler.
+$loop->defer(function () use ($loop): void {
+    \Fiber::run(function () use ($loop): void {
+        \Fiber::suspend(function (Continuation $continuation) use ($loop): void {
+            $loop->delay(1500, fn() => $continuation->resume(42));
+        }, $loop);
+
+        var_dump(1);
+    });
+
+    \Fiber::run(function () use ($loop): void {
+        \Fiber::suspend(function (Continuation $continuation) use ($loop): void {
+            $loop->delay(1000, fn() => $continuation->resume(42));
+        }, $loop);
+
+        var_dump(2);
+    });
+
+    \Fiber::run(function () use ($loop): void {
+        \Fiber::suspend(function (Continuation $continuation) use ($loop): void {
+            $loop->delay(2000, fn() => $continuation->resume(42));
+        }, $loop);
+
+        var_dump(3);
+    });
+});
+
+// Suspend the main thread to enter the FiberScheduler.
+\Fiber::suspend(function (Continuation $continuation) use ($loop): void {
+    $loop->delay(500, fn() => $continuation->resume(42));
+}, $loop);
+
+var_dump(4);
+```
+
+The next example uses the async framework [AMPHP v3](https://github.com/amphp/amp/tree/v3) mentioned in [Patches and Tests](#patches-and-tests) to demonstrate how fibers may be used by frameworks to create asynchronous that is written like synchronous code.
+
+The `defer(callable $callback, mixed ...$args)` function creates a new fiber that is executed when the current fiber suspends or terminates (as described in [Future Scope](#future-scope)). `delay(int $milliseconds)` suspends the current fiber until the given number of milliseconds has elasped.
+
+This example does the same thing as the above example, but the underlying Fiber API is abstracted away into an API specific to the Amp framework. Note that other frameworks may choose to implement this behavior in a different way.
+
+``` php
+use function Amp\defer;
+use function Amp\delay;
+
+defer(function (): void {
+    delay(1500);
+    var_dump(1);
+});
+
+defer(function (): void {
+    delay(1000);
+    var_dump(2);
+});
+
+defer(function (): void {
+    delay(2000);
+    var_dump(3);
+});
+
+delay(500);
+var_dump(4);
+```
+
+The next example again uses AMPHP v3 to demonstrate how the `FiberScheduler` fiber continues executing while the main thread is suspended. The `await(Promise $promise)` function suspends a fiber until the given promise is resolved and the `async(callable $callback, mixed ...$args)` function creates a new fiber, returning a promise that is resolved when the fiber completes, allowing multiple fibers to be executed concurrently.
+
+``` php
 use Amp\Loop;
 use function Amp\async;
 use function Amp\await;
+use function Amp\delay;
 
-// Note that the closure declares int as a return type, not Promise or Generator, but executes like a coroutine.
+// Note that the closure declares int as a return type, not Promise or Generator, but executes as a coroutine.
 $callback = function (int $id): int {
-    return await(new Delayed(1000, $id)); // Await promise resolution.
+	delay(1000); // Pauses the fiber this function executes within for 1 second.
+	return $id;
 };
 
 $timer = Loop::repeat(100, function (): void {
@@ -310,7 +389,7 @@ $result = \array_map($callback, [5, 6]);
 \var_dump($result);
 ```
 
-Since fibers can be paused during calls within the PHP VM, fibers can also be used to create asynchronous iterators. The example below again uses AMPHP v3, creating a `Pipeline`, an iterator-like object that implements `Traversable`, allowing it to be used with `foreach` and `yield from` to iterate over an asynchronous set of values. `PipelineSource` is used to emit values as they are generated. The `foreach` loop will suspend while waiting for another value from the pipeline.
+Since fibers can be paused during calls within the PHP VM, fibers can also be used to create asynchronous iterators. The example below again uses AMPHP v3, creating a `Pipeline`, an iterator-like object that implements `Traversable`, allowing it to be used with `foreach` and `yield from` to iterate over an asynchronous set of values. `PipelineSource` is used to emit values as they are generated. The `foreach` loop will suspend while waiting for another value from the pipeline.  The  `Delayed` object is a promise-like object that resolves itself with the second argument after the number of milliseconds given as the first argument.
 
 ``` php
 use Amp\Delayed;
@@ -340,6 +419,25 @@ foreach ($pipeline as $value) {
     \printf("Pipeline source yielded %d\n", $value);
 }
 ```
+
+The example below shows how [ReactPHP](https://github.com/reactphp) might use fibers to define an `await()` function using their `PromiseInterface` and `LoopInterface`. (Note this example assumes `LoopInterface` would extend `FiberScheduler`, which it already implements without modification.)
+
+``` php
+use React\EventLoop\LoopInterface;
+use React\Promise\PromiseInterface;
+
+function await(PromiseInterface $promise, LoopInterface $loop): mixed
+{
+    $enqueue = fn(\Continuation $continuation) => $promise->done(
+        fn(mixed $value) => $loop->futureTick(fn() => $continuation->resume($value)),
+        fn(\Throwable $reason) => $loop->futureTick(fn() => $continuation->throw($reason)
+    ));
+
+    return \Fiber::suspend($enqueue, $loop);
+}
+```
+
+A demonstration of integrating ReactPHP with fibers has been implemented in [`trowski/react-fiber`](https://github.com/trowski/react-fiber) for the current stable versions of `react/event-loop` and `react/promise`.
 
 ## References 
   * [Boost C++ fibers](https://www.boost.org/doc/libs/1_67_0/libs/fiber/doc/html/index.html)
