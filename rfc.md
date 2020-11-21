@@ -24,12 +24,12 @@ For people who are familiar with using promises and await/yield to achieve writi
 This RFC seeks to eliminate the distiction between synchronous and asynchronous functions by allowing functions to be interruptible without polluting the entire call stack. This would be achieved by:
 
  * Adding support for [Fibers](https://en.wikipedia.org/wiki/Fiber_(computer_science)) to PHP.
- * Adding `Fiber` and `Continuation` classes, and an interface `FiberScheduler`.
+ * Adding `Fiber` and `ReflectionFiber` classes, and an interface `FiberScheduler`.
  * Adding exception classes `FiberError` and `FiberExit` to represent errors.
 
 ### Definition of terms
 
-To allow better understanding of the RFC, this section defines what the names Fiber, Continuation, and FiberScheduler mean for the RFC being proposed.
+To allow better understanding of the RFC, this section defines what the names Fiber and FiberScheduler mean for the RFC being proposed.
 
 #### Fibers
 
@@ -39,19 +39,13 @@ Unlike stack-less Generators, each Fiber contains a call stack, allowing them to
 
 Fibers pause the entire execution stack, so the direct caller of the function does not need to change how it invokes the function.
 
-A fiber could be created with any callable and variadic argument list through `Fiber::run(callable $callback, mixed ...$args)`.
-
-The callable may use `Fiber::suspend()` to interrupt execution anywhere in the call stack (that is, the call to `Fiber::suspend()` may be in a deeply nested function or not even exist at all).
+Execution may be interrupted anywhere in the call stack using  `Fiber::suspend()` (that is, the call to `Fiber::suspend()` may be in a deeply nested function or not even exist at all).
 
 This proposal treats `{main}` as a fiber, allowing `Fiber::suspend()` to be called from the top-level context.
 
 Fibers can be suspended in *any* function call, including those called from within the PHP VM, such as functions provided to `array_map` or methods called by `foreach` on an `Iterator` object.
 
-#### Continuation 
-
-A continuation allows resuming a suspended fiber upon completion of an asynchronous operation.
-
-A fiber is resumed with any value using `Continuation::resume()` or by throwing an exception into the fiber using `Continuation::throw()`. The value is returned (or exception thrown) from `Fiber::suspend()`. A continuation may only be used a single time.
+Once suspended, execution of the fiber may be resumed with any value using `Fiber->resume()` or by throwing an exception into the fiber using `Fiber->throw()`. The value is returned (or exception thrown) from `Fiber::suspend()`.
 
 #### FiberScheduler
 
@@ -59,7 +53,7 @@ A `FiberScheduler` is able to create new fibers and resume suspended fibers. A f
 
 ## Proposal
 
-#### Fiber 
+### Fiber 
 
 A Fiber would be represented as class which would be defined in core PHP with the following signature:
 
@@ -67,84 +61,91 @@ A Fiber would be represented as class which would be defined in core PHP with th
 final class Fiber
 {
     /**
-     * Can only be called within {@see FiberScheduler::run()}.
-     *
-     * @param callable $callback Function to invoke when starting the Fiber.
-     * @param mixed ...$args Function arguments.
+     * @param callable $callback Function to invoke when running the fiber.
      */
-    public static function run(callable $callback, mixed ...$args): void { }
+    public static function create(callable $callback): Fiber { }
 
     /**
-     * Suspend execution of the fiber. A Continuation object is provided as the first argument to the given callback.
-     * The fiber may be resumed with {@see Continuation::resume()} or {@see Continuation::throw()}.
+     * Starts execution of the fiber. Returns when the fiber suspends or terminates.
      *
-     * @param callable(Continuation):void $enqueue
-     * @param FiberScheduler $scheduler
+     * Must be called within {@see FiberScheduler::run()}.
      *
-     * @return mixed Value provided to {@see Continuation::resume()}.
-     *
-     * @throws FiberError Thrown if within {@see FiberScheduler::run()}.
-     * @throws Throwable Exception provided to {@see Continuation::throw()}.
+     * @param mixed ...$args Arguments passed to fiber function.
      */
-    public static function suspend(callable $enqueue, FiberScheduler $scheduler): mixed { }
-
-    /**
-     * Private constructor to force use of {@see run()}.
-     */
-    private function __construct() { }
-}
-```
-
-`Fiber::suspend()` accepts a callback that is provided an instance of `Continuation` as the first argument. The `Continuation` object may be used at a later time to resume the fiber with any value or throw an exception into the fiber. The callback is invoked within the running fiber before it is suspended. The callback should create event watchers in the `FiberScheduler` instance (event loop), add the fiber to a list of pending fibers, or otherwise set up logic that will resume the fiber at a later time from the instance of `FiberScheduler` provided to `Fiber::suspend()`.
-
-#### Continuation
-
-A continuation would be represented by a class which would be fined in core PHP with the following signature:
-
-``` php
-final class Continuation
-{
-    /**
-     * @return bool True if the continuation is still pending, that is, if neither {@see resume()} or {@see throw()}
-     *              has been called.
-     */
-    public function isPending(): bool { }
+    public function start(mixed ...$args): void { }
 
     /**
      * Resumes the fiber, returning the given value from {@see Fiber::suspend()}.
+     * Returns when the fiber suspends or terminates.
+     *
+     * Must be called within {@see FiberScheduler::run()}.
      *
      * @param mixed $value
      *
-     * @throw FiberError If the continuation has already been used.
+     * @throw FiberError If the fiber is running or terminated.
      */
     public function resume(mixed $value = null): void { }
 
     /**
      * Throws the given exception into the fiber from {@see Fiber::suspend()}.
+     * Returns when the fiber suspends or terminates.
+     *
+     * Must be called within {@see FiberScheduler::run()}.
      *
      * @param Throwable $exception
      *
-     * @throw FiberError If the continuation has already been used.
+     * @throw FiberError If the fiber is running or terminated.
      */
     public function throw(Throwable $exception): void { }
 
     /**
-     * Cannot be constructed by user code.
+     * @return bool True if the fiber is suspended.
+     */
+    public function isSuspended(): bool { }
+
+    /**
+     * @return bool True if the fiber is currently running.
+     */
+    public function isRunning(): bool { }
+
+    /**
+     * @return bool True if the fiber has completed execution.
+     */
+    public function isTerminated(): bool { }
+
+    /**
+     * Suspend execution of the fiber. The Fiber object is provided as the first argument to the given callback.
+     * The fiber may be resumed with {@see Fiber::resume()} or {@see Fiber::throw()}.
+     *
+     * Cannot be called within {@see FiberScheduler::run()}.
+     *
+     * @param callable(Fiber):void $enqueue
+     * @param FiberScheduler $scheduler
+     *
+     * @return mixed Value provided to {@see Fiber::resume()}.
+     *
+     * @throws FiberError Thrown if within {@see FiberScheduler::run()} or within a callback given to this method.
+     * @throws Throwable Exception provided to {@see Fiber::throw()}.
+     */
+    public static function suspend(callable $enqueue, FiberScheduler $scheduler): mixed { }
+
+    /**
+     * Private constructor to force use of {@see create()}.
      */
     private function __construct() { }
 }
 ```
 
-A `Continuation` object is created when suspending a fiber and may be used to resume the suspended fiber in one of two ways:
+A `Fiber` object is created using `Fiber::create(callable $callback)` with any callable. The callable need not call `Fiber::suspend()` directly, it may be in a deeply nested call, far down the call stack (or perhaps never call `Fiber::suspend()` at all). The returned `Fiber` may be started within a `FiberScheduler` (discussed below) using `Fiber->start(mixed ...$args)` with a variadic argument list that is provided as arguments to the callable used when creating the `Fiber`.
 
- * returning a value from `Fiber::suspend()` using `Continuation::resume()`
- * throwing an exception from `Fiber::suspend()` using `Continuation::throw()`
+`Fiber::suspend()` accepts a callback that is provided an instance of `Fiber` as the first argument. The `Fiber` object may be used at a later time to resume the fiber with any value or throw an exception into the fiber. The callback is invoked within the running fiber before it is suspended. The callback should create event watchers in the `FiberScheduler` instance (event loop), add the fiber to a list of pending fibers, or otherwise set up logic that will resume the fiber at a later time from the instance of `FiberScheduler` provided to `Fiber::suspend()`.
 
-After one of these two methods is called, the continuation has been used and cannot be used again. `Continuation::isPending()` will return `false` after calling either method.
+A suspended fiber may be resumed in one of two ways:
 
-If the `Continuation` object is destroyed before calling either method, the associated fiber also will be destroyed as there is no longer a way to resume the fiber. (see [Unfinished Fibers](#unfinished-fibers)).
+ * returning a value from `Fiber::suspend()` using `Fiber->resume()`
+ * throwing an exception from `Fiber::suspend()` using `Fiber->throw()`
 
-#### FiberScheduler 
+### FiberScheduler 
 
 ``` php
 interface FiberScheduler
@@ -157,21 +158,83 @@ interface FiberScheduler
 }
 ```
 
-A `FiberScheduler` defines a class is able to create new fibers using `Fiber::run()` and resume fibers using `Continuation` objects. In general, a fiber scheduler would be an event loop that responds to events on sockets, timers, and deferred functions.
+A `FiberScheduler` defines a class is able to start new fibers using `Fiber->start()` and resume fibers using `Fiber->resume()` and `Fiber->throw()`. In general, a fiber scheduler would be an event loop that responds to events on sockets, timers, and deferred functions.
 
-When an instance of `FiberScheduler` is provided to `Fiber::suspend()` for the first time, internally a new fiber (a scheduler fiber) is created for that instance and invokes `FiberScheduler::run()`. The scheduler fiber created is paused when resuming another fiber and again resumed when the same instance of `FiberScheduler` is provided to another call to `Fiber::suspend()`. It is expected that `FiberScheduler::run()` will not return until all pending events have been processed and any suspended fibers have been resumed. In practice this is not difficult, as the scheduler fiber is paused when resuming a fiber and only re-entered upon a fiber suspending that creates more events in the scheduler.
+When an instance of `FiberScheduler` is provided to `Fiber::suspend()` for the first time, internally a new fiber (a scheduler fiber) is created for that instance and invokes `FiberScheduler->run()`. The scheduler fiber created is paused when resuming another fiber and again resumed when the same instance of `FiberScheduler` is provided to another call to `Fiber::suspend()`. It is expected that `FiberScheduler->run()` will not return until all pending events have been processed and any suspended fibers have been resumed. In practice this is not difficult, as the scheduler fiber is paused when resuming a fiber and only re-entered upon a fiber suspending that creates more events in the scheduler.
 
-`FiberScheduler::run()` throwing an exception results in an uncaught exception and exits the script.
+`FiberScheduler->run()` throwing an exception results in an uncaught exception and exits the script.
 
-A fiber *must* be resumed from the fiber created from the instance of `FiberScheduler` provided to `Fiber::suspend()`. Doing otherwise results in a fatal error. In practice this means that calling `Continuation::resume()` or `Continuation::throw()` must be within a callback registered to an event handled within a `FiberScheduler` instance. Often it is desirable to ensure resumption of a fiber is asynchronous, making it easier to reason about program state before and after an event would resume a fiber.
+A fiber *must* be resumed from the fiber created from the instance of `FiberScheduler` provided to `Fiber::suspend()`. Doing otherwise results in a fatal error. In practice this means that calling `Fiber->resume()` or `Fiber->throw()` must be within a callback registered to an event handled within a `FiberScheduler` instance. Often it is desirable to ensure resumption of a fiber is asynchronous, making it easier to reason about program state before and after an event would resume a fiber.
 
 When a script ends, each fiber scheduler used in the a script is resumed and allowed to run to completion to complete unfinished tasks or free resources.
 
 This RFC does not include an implementation for `FiberScheduler`. Instead, it proposes only defining an interface and any implementation would be done in user code (see [Future Scope](#future-scope)).
 
+### ReflectionFiber
+
+`ReflectionFiber` is used to inspect executing fibers. A `ReflectionFiber` object can be created from a `Fiber` object or from an object implementing `FiberScheduler` that has been used to suspend a fiber. This reflection class is similar to `ReflectionGenerator`.
+
+``` php
+final class ReflectionFiber
+{
+    /**
+     * @param Fiber $fiber Any Fiber object, including those are not started or have
+     *                     terminated.
+     *
+     * @return ReflectionFiber
+     */
+    public static function fromFiber(Fiber $fiber): ReflectionFiber { }
+
+    /**
+     * @param FiberScheduler $scheduler
+     *
+     * @return ReflectionFiber|null Returns null if the {@see FiberScheduler} has not been
+     *                              used to suspend a fiber.
+     */
+    public static function fromFiberScheduler(FiberScheduler $scheduler): ?ReflectionFiber { }
+
+    /**
+     * @return string Current file of fiber execution.
+     */
+    public function getExecutingFile(): string { }
+
+    /**
+     * @return int Current line of fiber execution.
+     */
+    public function getExecutingLine(): int { }
+
+    /**
+     * @return array Fiber backtrace, similar to {@see debug_backtrace()}
+     *               and {@see ReflectionGenerator::getTrace()}.
+     */
+    public function getTrace(int $options = DEBUG_BACKTRACE_PROVIDE_OBJECT): array { }
+
+    /**
+     * @return bool True if the fiber is currently suspended, false otherwise.
+     */
+    public function isSuspended(): bool { }
+
+    /**
+     * @return bool True if the fiber is currently running, false otherwise.
+     */
+    public function isRunning(): bool { }
+
+    /**
+     * @return bool True if the fiber has completed execution (either returning or
+     *              throwing an exception), false otherwise.
+     */
+    public function isTerminated(): bool { }
+
+    /**
+     * @return bool True if the fiber was created from an instance of {@see FiberScheduler}.
+     */
+    public function isFiberScheduler(): bool { }
+}
+```
+
 #### Unfinished Fibers
 
-Fibers that are not finished (do not complete execution) are destroyed similarly to unfinished generators, executing any pending `finally` blocks. `Fiber::suspend()` may not be invoked in a force-closed fiber, just as `yield` cannot be used in a force-closed generator. Fibers are destroyed when there are no references to the `Continuation` object created from the last suspend point. An exception to this is the `{main}` fiber, where removing all references to the `Continuation` object that resumes the main fiber will result in a `FiberExit` exception to be thrown from the call to `Fiber::suspend()`, resulting in a fatal error.
+Fibers that are not finished (do not complete execution) are destroyed similarly to unfinished generators, executing any pending `finally` blocks. `Fiber::suspend()` may not be invoked in a force-closed fiber, just as `yield` cannot be used in a force-closed generator. Fibers are destroyed when there are no references to the `Fiber` object. An exception to this is the `{main}` fiber, where removing all references to the `Fiber` object that resumes the main fiber will result in a `FiberExit` exception to be thrown from the call to `Fiber::suspend()`, resulting in a fatal error.
 
 #### Fiber Stacks
 
@@ -225,7 +288,7 @@ This RFC does not preclude adding async/await and an event loop to core, see [Fu
 
 ## Backward Incompatible Changes
 
-Declares `Continuation`, `Fiber`, `FiberScheduler`, `FiberError`, and `FiberExit` in the root namespace. No other BC breaks.
+Declares `Fiber`, `FiberScheduler`, `FiberError`, `FiberExit`, and `ReflectionFiber` in the root namespace. No other BC breaks.
 
 ## Proposed PHP Version(s)
 
@@ -267,13 +330,13 @@ Implementation and tests at [amphp/ext-fiber](https://github.com/amphp/ext-fiber
 
 ## Examples
 
-The example below uses a [simple implemenation of a `FiberScheduler`](https://github.com/amphp/ext-fiber/blob/395bf3f66805d0d41363c82be142698093ff3348/scripts/Loop.php) to delay execution of a function for 1000 milliseconds. The function is scheduled when the fiber is suspended with `Fiber::suspend()`. When this function is invoked, the fiber is resumed with the value given to `Continuation::resume()`.
+The example below uses a [simple implemenation of a `FiberScheduler`](https://github.com/amphp/ext-fiber/blob/395bf3f66805d0d41363c82be142698093ff3348/scripts/Loop.php) to delay execution of a function for 1000 milliseconds. The function is scheduled when the fiber is suspended with `Fiber::suspend()`. When this function is invoked, the fiber is resumed with the value given to `Fiber->resume()`.
 
 ``` php
 $loop = new Loop;
 
-$value = Fiber::suspend(function (Continuation $continuation) use ($loop): void {
-	$loop->delay(1000, fn() => $continuation->resume(1));
+$value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+	$loop->delay(1000, fn() => $fiber->resume(1));
 }, $loop);
 
 var_dump($value); // int(1)
@@ -286,38 +349,27 @@ The next example creates three new fibers within a callback executed in the `Fib
 ``` php
 $loop = new Loop;
 
-// Create three new fibers in the FiberScheduler.
-$loop->defer(function () use ($loop): void {
-    \Fiber::run(function () use ($loop): void {
-        \Fiber::suspend(function (Continuation $continuation) use ($loop): void {
-            $loop->delay(1500, fn() => $continuation->resume(42));
-        }, $loop);
-
-        var_dump(1);
-    });
-
-    \Fiber::run(function () use ($loop): void {
-        \Fiber::suspend(function (Continuation $continuation) use ($loop): void {
-            $loop->delay(1000, fn() => $continuation->resume(42));
-        }, $loop);
-
-        var_dump(2);
-    });
-
-    \Fiber::run(function () use ($loop): void {
-        \Fiber::suspend(function (Continuation $continuation) use ($loop): void {
-            $loop->delay(2000, fn() => $continuation->resume(42));
-        }, $loop);
-
-        var_dump(3);
-    });
+// Create three new fibers and run them in the FiberScheduler.
+$fiber = Fiber::create(function () use ($loop): void {
+    delay($loop, 1500);
+    var_dump(1);
 });
+$loop->defer(fn() => $fiber->start());
+
+$fiber = Fiber::create(function () use ($loop): void {
+    delay($loop, 1000);
+    var_dump(2);
+});
+$loop->defer(fn() => $fiber->start());
+
+$fiber = Fiber::create(function () use ($loop): void {
+    delay($loop, 2000);
+    var_dump(3);
+});
+$loop->defer(fn() => $fiber->start());
 
 // Suspend the main thread to enter the FiberScheduler.
-\Fiber::suspend(function (Continuation $continuation) use ($loop): void {
-    $loop->delay(500, fn() => $continuation->resume(42));
-}, $loop);
-
+delay($loop, 500);
 var_dump(4);
 ```
 
@@ -371,22 +423,22 @@ Loop::unreference($timer); // Unreference timer so the loop exits automatically 
 
 // Invoking $callback returns an int, but is executed asynchronously.
 $result = $callback(1); // Call a subroutine within this green thread, taking 1 second to return.
-\var_dump($result);
+var_dump($result);
 
 // Simultaneously runs two new green threads, await their resolution in this green thread.
 $result = await([  // Executed simultaneously, only 1 second will elapse during this await.
     async($callback, 2),
     async($callback, 3),
 ]);
-\var_dump($result); // Executed after 2 seconds.
+var_dump($result); // Executed after 2 seconds.
 
 $result = $callback(4); // Call takes 1 second to return.
-\var_dump($result);
+var_dump($result);
 
 // array_map() takes 2 seconds to execute as the calls are not concurrent, but this shows that fibers are
 // supported by internal callbacks.
-$result = \array_map($callback, [5, 6]);
-\var_dump($result);
+$result = array_map($callback, [5, 6]);
+var_dump($result);
 ```
 
 Since fibers can be paused during calls within the PHP VM, fibers can also be used to create asynchronous iterators. The example below again uses AMPHP v3, creating a `Pipeline`, an iterator-like object that implements `Traversable`, allowing it to be used with `foreach` and `yield from` to iterate over an asynchronous set of values. `PipelineSource` is used to emit values as they are generated. The `foreach` loop will suspend while waiting for another value from the pipeline.  The  `Delayed` object is a promise-like object that resolves itself with the second argument after the number of milliseconds given as the first argument.
@@ -416,7 +468,7 @@ defer(function (PipelineSource $source): void {
 }, $source);
 
 foreach ($pipeline as $value) {
-    \printf("Pipeline source yielded %d\n", $value);
+    printf("Pipeline source yielded %d\n", $value);
 }
 ```
 
@@ -428,12 +480,12 @@ use React\Promise\PromiseInterface;
 
 function await(PromiseInterface $promise, LoopInterface $loop): mixed
 {
-    $enqueue = fn(\Continuation $continuation) => $promise->done(
-        fn(mixed $value) => $loop->futureTick(fn() => $continuation->resume($value)),
-        fn(\Throwable $reason) => $loop->futureTick(fn() => $continuation->throw($reason)
+    $enqueue = fn(Fiber $fiber) => $promise->done(
+        fn(mixed $value) => $loop->futureTick(fn() => $fiber->resume($value)),
+        fn(Throwable $reason) => $loop->futureTick(fn() => $fiber->throw($reason)
     ));
 
-    return \Fiber::suspend($enqueue, $loop);
+    return Fiber::suspend($enqueue, $loop);
 }
 ```
 
