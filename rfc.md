@@ -238,7 +238,7 @@ Fibers that are not finished (do not complete execution) are destroyed similarly
 
 #### Fiber Stacks
 
-Each fiber is allocated a separate C stack and VM stack. The stack is allocated using `mmap` if available, meaning physical memory is used only on demand (if it needs to be allocated to a stack value) on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with a ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
+Each fiber is allocated a separate C stack and VM stack. The C stack is allocated using `mmap` if available, meaning physical memory is used only on demand (if it needs to be allocated to a stack value) on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with a ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
 
 ## FAQ
 
@@ -262,7 +262,7 @@ Switching between fibers is lightweight, requiring changing the value of approxi
 
 #### What platforms are supported?
 
-Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, i386, ARM (32 and 64-bit), PPC (32 and 64-bit), MIPS, Windows, and *nix platforms with ucontext. Support for C stack switching is provided by Boost, which has a [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
+Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, i386, ARM (32 and 64-bit), PPC (32 and 64-bit), MIPS, Windows, and *nix platforms with ucontext. Support for C stack switching using assembly code is provided by Boost, which has a [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
 
 #### How is a `FiberScheduler` implemented?
 
@@ -285,6 +285,12 @@ This RFC proposes only the bare minimum required to allow user code to implement
 It is the opinion of the author of this RFC that it is best to provide the bare minimum in core and allow user code to implement other components as they desire. If the community moves toward a single event loop API or a need emerges for an event loop in PHP core, this can be done in a future RFC. Providing a core event loop without core functionality using it (such as streams, file access, etc.) would be misleading and confusing for users. Deferring such functionality to user frameworks and providing only a minimum API in core keeps expectations in check.
 
 This RFC does not preclude adding async/await and an event loop to core, see [Future Scope](#future-scope).
+
+#### How does this proposal differ from prior Fiber proposals?
+
+The prior [Fiber RFC](https://wiki.php.net/rfc/fiber) did not support context switching within internal calls (`array_map`, `preg_replace_callback`, etc.) or opcode handlers (`foreach`, `yield from`, etc.). This could result in a crash if a function using fibers was used in any user code called from C code or in extensions that override `zend_execute_ex` such as Xdebug.
+
+The API proposed here also differs, allowing suspension of the main context.
 
 ## Backward Incompatible Changes
 
