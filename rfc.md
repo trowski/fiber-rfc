@@ -336,7 +336,7 @@ The example below uses a [simple implemenation of a `FiberScheduler`](https://gi
 $loop = new Loop;
 
 $value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
-	$loop->delay(1000, fn() => $fiber->resume(1));
+    $loop->delay(1000, fn() => $fiber->resume(1));
 }, $loop);
 
 var_dump($value); // int(1)
@@ -412,8 +412,8 @@ use function Amp\delay;
 
 // Note that the closure declares int as a return type, not Promise or Generator, but executes as a coroutine.
 $callback = function (int $id): int {
-	delay(1000); // Pauses the fiber this function executes within for 1 second.
-	return $id;
+    delay(1000); // Pauses the fiber this function executes within for 1 second.
+    return $id;
 };
 
 $timer = Loop::repeat(100, function (): void {
