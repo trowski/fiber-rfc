@@ -162,9 +162,13 @@ A `FiberScheduler` defines a class is able to start new fibers using `Fiber->sta
 
 When an instance of `FiberScheduler` is provided to `Fiber::suspend()` for the first time, internally a new fiber (a scheduler fiber) is created for that instance and invokes `FiberScheduler->run()`. The scheduler fiber created is paused when resuming another fiber and again resumed when the same instance of `FiberScheduler` is provided to another call to `Fiber::suspend()`. It is expected that `FiberScheduler->run()` will not return until all pending events have been processed and any suspended fibers have been resumed. In practice this is not difficult, as the scheduler fiber is paused when resuming a fiber and only re-entered upon a fiber suspending that creates more events in the scheduler.
 
-`FiberScheduler->run()` throwing an exception results in an uncaught exception and exits the script.
+If a scheduler completes (that is, returns from `FiberScheduler->run()`) without resuming the suspended fiber, an instance of `FiberError` is thrown from the call to `Fiber::suspend()`.
 
-A fiber *must* be resumed from the fiber created from the instance of `FiberScheduler` provided to `Fiber::suspend()`. Doing otherwise results in a fatal error. In practice this means that calling `Fiber->resume()` or `Fiber->throw()` must be within a callback registered to an event handled within a `FiberScheduler` instance. Often it is desirable to ensure resumption of a fiber is asynchronous, making it easier to reason about program state before and after an event would resume a fiber.
+If a `FiberScheduler` instance whose associated fiber has completed is later reused in a call to `Fiber::suspend()`, `FiberScheduler->run()` will be invoked again to create a new fiber associated with that `FiberScheduler` instance.
+
+`FiberScheduler->run()` throwing an exception results in an uncaught `FiberExit` exception and exits the script.
+
+A fiber *must* be resumed from within the instance of `FiberScheduler` provided to `Fiber::suspend()`. Doing otherwise results in a fatal error. In practice this means that calling `Fiber->resume()` or `Fiber->throw()` must be within a callback registered to an event handled within a `FiberScheduler` instance. Often it is desirable to ensure resumption of a fiber is asynchronous, making it easier to reason about program state before and after an event would resume a fiber.
 
 When a script ends, each fiber scheduler used in the a script is resumed and allowed to run to completion to complete unfinished tasks or free resources.
 
@@ -254,7 +258,7 @@ Using a fiber scheduler instead of a generator-like API enables a few features:
 
  * Suspension of the top-level (`{main}`): When the main fiber is suspended, execution continues into the fiber scheduler.
  * Nesting schedulers: A fiber may suspend into different fiber schedulers at various suspension points. Each scheduler will be started/suspended/resumed as needed. While a fully asynchronous app may want to ensure it does not use multiple fiber schedulers, a FPM application may find it acceptable to do so.
- * Elimination of boilerplate: Suspending at the top-level eliminates the need for an application to wrap code into a library-specific scheduler, allowing library code to suspend and resume as needed.
+ * Elimination of boilerplate: Suspending at the top-level eliminates the need for an application to wrap code into a library-specific scheduler, allowing library code to suspend and resume as needed, without concern that the user used the appropriate boilerplate that may conflict with another libraries boilerplate.
 
 #### What about performance?
 
@@ -274,9 +278,9 @@ Blocking code (such as `file_get_contents()`) will continue to block the entire 
 
 #### Why add this to PHP core?
 
-Putting this capability directly in PHP core makes it widely available on any host providing PHP. Often users are not able to determine what extensions may be available in a particular hosting environment, are unsure of how to install extensions, or do not want to install 3rd-party extensions. Adding this feature directly to PHP core makes allows it to be used by a wide variety of library authors without concerns of portability.
+Adding this capability directly in PHP core makes it widely available on any host providing PHP. Often users are not able to determine what extensions may be available in a particular hosting environment, are unsure of how to install extensions, or do not want to install 3rd-party extensions. Adding this feature directly to PHP core makes allows it to be used by a wide variety of library authors without concerns of portability.
 
-Further, the extension currently forbids suspending in shutdown functions and destructors executed during shutdown. However, there is no technical reason for this other than the hooks provided by PHP for extensions. Adding the fibers to PHP core would allow the engine to finish executing fiber schedulers after registered shutdown functions are invoked.
+Futher, the extension currently uses the observer API to determine when fiber schedulers are run to completion, however the timing is not ideal, as it occurs *before* shutdown functions and destructors are executed. Adding the fibers to PHP core would allow the engine to finish executing fiber schedulers *after* registered shutdown functions are invoked.
 
 #### Why not add an event loop and async/await API to core?
 
