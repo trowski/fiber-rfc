@@ -270,6 +270,20 @@ PHP 8.1
 
 ## Future Scope
 
+#### suspend keyword
+
+`Fiber::suspend()` could be replaced with a keyword defining a statement where the body of the statement is executed before suspending the fiber, setting the `Fiber` instance to the variable name given and entering the `FiberScheduler` instance from the expression. (`to` should not need to be a keyword or reserved word, similar to `yield from`).
+
+**suspend** *variable* **to** *expression* **{** *statement(s)* **}**
+
+Below would be an example usage inside an object method, assigning the `Fiber` instance to an array before suspending using the `FiberScheduler` instance `$scheduler`.
+
+``` php
+suspend $fiber to $scheduler {
+    $this->waiting[$position] = $fiber;
+}
+```
+
 #### async/await keywords
 
 Using an internally defined `FiberScheduler` and an additionally defined `Awaitable` object, `Fiber::suspend()` could be replaced with the keyword `await` and new fibers could be created using the keyword `async`. The usage of `async` differs slightly from languages such as JS or Hack. `async` is not used to declare asynchronous functions, rather it is used at call time to modify the call to any function or method to return an awaitable and start a new fiber (green-thread).
