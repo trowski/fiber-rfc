@@ -399,6 +399,8 @@ throw new Exception("Test");
 
 To be useful, rather than the scheduler immediately resuming the fiber, the scheduler should resume a fiber at a later time in response to an event.
 
+----
+
 The next example adds to the `FiberScheduler` the ability to poll a socket for incoming data, invoking a callback when data becomes available on the socket. This scheduler can now be used to resume a fiber *only* when data becomes available on a socket, avoiding a blocking read.
 
 ``` php
@@ -489,6 +491,8 @@ echo Fiber::suspend(
 
 If this example were written in a similar order without fibers, the script would be unable to read from a socket before writing to it, as the call to `fread()` would block until data was available.
 
+----
+
 The next example below uses [`Loop`](https://github.com/amphp/ext-fiber/blob/7f838e1f067e32cc08cfe79e60feef95e0748b82/scripts/Loop.php), a simple implemenation of `FiberScheduler` yet more complex than that in the above examples, to delay execution of a function for 1000 milliseconds. The function is scheduled when the fiber is suspended with `Fiber::suspend()`. When this function is invoked, the fiber is resumed with the value given to `Fiber->resume()`.
 
 ``` php
@@ -502,6 +506,8 @@ var_dump($value); // int(1)
 ```
 
 While a contrived example, imagine if the fiber was awaiting data on a network socket or the result of a database query. Combining this with the ability to simultaneously run and suspend many fibers allows a single PHP process to concurrently await many events.
+
+----
 
 The next example creates three new fibers within a callback executed in the `FiberScheduler` instance to execute four timers (three created plus the main thread).
 
@@ -540,13 +546,15 @@ Fiber::suspend(function (Fiber $fiber) use ($loop): void {
 var_dump(4);
 ```
 
+----
+
 The next few examples use the async framework [AMPHP v3](https://github.com/amphp/amp/tree/v3) mentioned in [Patches and Tests](#patches-and-tests) to demonstrate how fibers may be used by frameworks to create asynchronous code that is written like synchronous code.
 
-AMPHP v3 uses an [event loop interface](https://github.com/amphp/amp/blob/a673c80fded535de1a12f372c7412a761ffe5019/lib/Loop/Driver.php) that extends `FiberScheduler` together with a variety of functions and a placeholder object ([`Promise`](https://github.com/amphp/amp/blob/a673c80fded535de1a12f372c7412a761ffe5019/lib/Promise.php)) to build on top of the underlying fiber API to create its own opinionated API to create green-threads and execute code concurrently. Other frameworks may choose to approach creating green-threads and placeholders differently.
+AMPHP v3 uses an [event loop interface](https://github.com/amphp/amp/blob/a673c80fded535de1a12f372c7412a761ffe5019/lib/Loop/Driver.php) that extends `FiberScheduler` together with a variety of functions and a placeholder object ([`Promise`](https://github.com/amphp/amp/blob/a673c80fded535de1a12f372c7412a761ffe5019/lib/Promise.php)) to build on top of the underlying fiber API to create its own opinionated API to create green-threads (coroutines) to execute code concurrently. Users of AMPHP v3 do not use the Fiber API directly, the framework handles suspending and creating fibers as necessary. Other frameworks may choose to approach creating green-threads and placeholders differently.
 
 The `defer(callable $callback, mixed ...$args)` function creates a new fiber that is executed when the current fiber suspends or terminates (as described in [Future Scope](#future-scope)). `delay(int $milliseconds)` suspends the current fiber until the given number of milliseconds has elasped.
 
-This example does the same thing as the above example, but the underlying Fiber API is abstracted away into an API specific to the Amp framework. Note that other frameworks may choose to implement this behavior in a different way.
+This example does the same thing as the above example, but the underlying Fiber API is abstracted away into an API specific to the Amp framework. Note again this code is specific to AMPHP v3 and not part of this RFC, other frameworks may choose to implement this behavior in a different way.
 
 ``` php
 use function Amp\defer;
@@ -570,6 +578,8 @@ defer(function (): void {
 delay(500);
 var_dump(4);
 ```
+
+----
 
 The next example again uses AMPHP v3 to demonstrate how the `FiberScheduler` fiber continues executing while the main thread is suspended. The `await(Promise $promise)` function suspends a fiber until the given promise is resolved and the `async(callable $callback, mixed ...$args)` function creates a new fiber, returning a promise that is resolved when the fiber completes, allowing multiple fibers to be executed concurrently.
 
@@ -606,6 +616,8 @@ $result = array_map('asyncTask', [5, 6]);
 var_dump($result);
 ```
 
+----
+
 Since fibers can be paused during calls within the PHP VM, fibers can also be used to create asynchronous iterators. The example below again uses AMPHP v3, creating a `Pipeline`, an iterator-like object that implements `Traversable`, allowing it to be used with `foreach` and `yield from` to iterate over an asynchronous set of values. `PipelineSource` is used to emit values as they are generated. The `foreach` loop will suspend while waiting for another value from the pipeline.  The  `Delayed` object is a promise-like object that resolves itself with the second argument after the number of milliseconds given as the first argument.
 
 ``` php
@@ -637,6 +649,8 @@ foreach ($pipeline as $value) {
 }
 ```
 
+----
+
 The example below shows how [ReactPHP](https://github.com/reactphp) might use fibers to define an `await()` function using their `PromiseInterface` and `LoopInterface`. (Note this example assumes `LoopInterface` would extend `FiberScheduler`, which it already implements without modification.)
 
 ``` php
@@ -655,6 +669,8 @@ function await(PromiseInterface $promise, LoopInterface $loop): mixed
 ```
 
 A demonstration of integrating ReactPHP with fibers has been implemented in [`trowski/react-fiber`](https://github.com/trowski/react-fiber) for the current stable versions of `react/event-loop` and `react/promise`.
+
+----
 
 The final example uses the `cURL` extension to create a fiber scheduler based on `curl_multi_exec()` to perform multiple HTTP requests concurrently. When a new fiber is started, `Scheduler->async()` returns a `Promise`, a placeholder to represent the eventual result of the new fiber, which may be awaited later using `Scheduler->await()`.
 
