@@ -520,34 +520,34 @@ $loop = new Loop;
 
 // Create three new fibers and run them in the FiberScheduler.
 $fiber = Fiber::create(function () use ($loop): void {
-    Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+    $value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
         $loop->delay(1500, fn() => $fiber->resume(1));
     }, $loop);
-    var_dump(1);
+    var_dump($value);
 });
 $loop->defer(fn() => $fiber->start());
 
 $fiber = Fiber::create(function () use ($loop): void {
-    Fiber::suspend(function (Fiber $fiber) use ($loop): void {
-        $loop->delay(1000, fn() => $fiber->resume(1));
+    $value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+        $loop->delay(1000, fn() => $fiber->resume(2));
     }, $loop);
-    var_dump(2);
+    var_dump($value);
 });
 $loop->defer(fn() => $fiber->start());
 
 $fiber = Fiber::create(function () use ($loop): void {
-    Fiber::suspend(function (Fiber $fiber) use ($loop): void {
-        $loop->delay(2000, fn() => $fiber->resume(1));
+    $value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+        $loop->delay(2000, fn() => $fiber->resume(3));
     }, $loop);
-    var_dump(3);
+    var_dump($value);
 });
 $loop->defer(fn() => $fiber->start());
 
 // Suspend the main thread to enter the FiberScheduler.
-Fiber::suspend(function (Fiber $fiber) use ($loop): void {
-    $loop->delay(500, fn() => $fiber->resume(1));
+$value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+    $loop->delay(500, fn() => $fiber->resume(4));
 }, $loop);
-var_dump(4);
+var_dump($value);
 ```
 
 The above code will output the following:
