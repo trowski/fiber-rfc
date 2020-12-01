@@ -332,13 +332,13 @@ $awaitable = async functionOrMethod();
 await $awaitable; // Await the function result at a later point.
 ```
 
-These keywords can be created in user code using the proposed fiber API. [AMPHP v3](https://github.com/amphp/amp/tree/v3) (a work-in-progress) defines [`await()` and `async()`](https://github.com/amphp/amp/blob/6d5e0f5ff73a7ffb47243a491fd09b1d57930d23/lib/functions.php#L6-L61) functions to await `Amp\Promise` instances and create new coroutines.
+These keywords can be created in user code using the proposed fiber API. [AMPHP v3](https://github.com/amphp/amp/tree/v3) (a work-in-progress) defines [`await()` and `async()`](https://github.com/amphp/amp/blob/0f2cf561427d3d9993bf2615ae21022d40200502/lib/functions.php#L6-L63) functions to await `Amp\Promise` instances and create new coroutines.
 
 #### defer keyword 
 
 Fibers may be used to implement a `defer` keyword that executes a statement within a new fiber when the current fiber is suspended or terminates. Such a keyword would also require an internal implementation of `FiberScheduler` and likely would be an addition after async/await keywords. This behavior differs from `defer` in Go, as PHP is already able to mimick such behavior with `finally` blocks.
 
-This keyword also can be created in user code using the proposed fiber API, an example being [`defer()`](https://github.com/amphp/amp/blob/6d5e0f5ff73a7ffb47243a491fd09b1d57930d23/lib/functions.php#L77-L87) in AMPHP v3.
+This keyword also can be created in user code using the proposed fiber API, an example being [`defer()`](https://github.com/amphp/amp/blob/0f2cf561427d3d9993bf2615ae21022d40200502/lib/functions.php#L79-L98) in AMPHP v3.
 
 ## Proposed Voting Choices 
 
@@ -521,24 +521,24 @@ $loop = new Loop;
 // Create three new fibers and run them in the FiberScheduler.
 $fiber = Fiber::create(function () use ($loop): void {
     Fiber::suspend(function (Fiber $fiber) use ($loop): void {
-		$loop->delay(1500, fn() => $fiber->resume(1));
-	}, $loop);
+        $loop->delay(1500, fn() => $fiber->resume(1));
+    }, $loop);
     var_dump(1);
 });
 $loop->defer(fn() => $fiber->start());
 
 $fiber = Fiber::create(function () use ($loop): void {
     Fiber::suspend(function (Fiber $fiber) use ($loop): void {
-		$loop->delay(1000, fn() => $fiber->resume(1));
-	}, $loop);
+        $loop->delay(1000, fn() => $fiber->resume(1));
+    }, $loop);
     var_dump(2);
 });
 $loop->defer(fn() => $fiber->start());
 
 $fiber = Fiber::create(function () use ($loop): void {
     Fiber::suspend(function (Fiber $fiber) use ($loop): void {
-		$loop->delay(2000, fn() => $fiber->resume(1));
-	}, $loop);
+        $loop->delay(2000, fn() => $fiber->resume(1));
+    }, $loop);
     var_dump(3);
 });
 $loop->defer(fn() => $fiber->start());
@@ -615,7 +615,7 @@ function asyncTask(int $id): int {
 
 $running = true;
 defer(function () use (&$running): void {
-	// This loop is to show how this fiber is not blocked by other fibers.
+    // This loop is to show how this fiber is not blocked by other fibers.
     while ($running) {
         delay(100);
         echo ".\n";
