@@ -11,7 +11,7 @@ For most of PHP's history, people have written PHP code only as synchronous code
 
 More recently, there have been multiple projects that have allowed people to write asynchronous PHP code.  Asynchronous functions accept a callback or return a placeholder for a future value (such as a promise) to run code at a future time once the result is available. Execution continues without waiting for a result. Examples of these projects are [AMPHP](https://amphp.org/), [ReactPHP](https://reactphp.org/), and [Guzzle](https://guzzlephp.org/).
 
-The problem this RFC seeks to address is a difficult one to explain, but can be referred to as the ["What color is your function?"](https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/) problem. That link contains a detailed explanation of the problem.
+The problem this RFC seeks to address is a difficult one to explain, but can be referred to as the ["What color is your function?"](https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/) problem.
 
 A summary of the problem described in the linked article is:
 
@@ -24,7 +24,7 @@ For people who are familiar with using promises and await/yield to achieve writi
 This RFC seeks to eliminate the distiction between synchronous and asynchronous functions by allowing functions to be interruptible without polluting the entire call stack. This would be achieved by:
 
  * Adding support for [Fibers](https://en.wikipedia.org/wiki/Fiber_(computer_science)) to PHP.
- * Adding `Fiber` and `ReflectionFiber` classes, and an interface `FiberScheduler`.
+ * Adding `Fiber`, `ReflectionFiber`, and `ReflectionFiberScheduler` classes, and an interface `FiberScheduler`.
  * Adding exception classes `FiberError` and `FiberExit` to represent errors.
 
 ### Definition of terms
@@ -49,7 +49,7 @@ Once suspended, execution of the fiber may be resumed with any value using `Fibe
 
 #### FiberScheduler
 
-A `FiberScheduler` is able to create new fibers and resume suspended fibers. A fiber scheduler will generally act as an event loop, responding to events on sockets, timers, and deferred functions. When a fiber is suspended, execution switches into the fiber scheduler to await events or resume other suspended fibers.
+A `FiberScheduler` is able to start new fibers and resume suspended fibers. A fiber scheduler will generally act as an event loop, responding to events on sockets, timers, and deferred functions. When a fiber is suspended, execution switches into the fiber scheduler to await events or resume other suspended fibers.
 
 ## Proposal
 
@@ -268,7 +268,9 @@ Fibers are an advanced feature that most users will not use directly. This featu
 
 #### Why use `FiberScheduler` instead of an API similar to Lua or Ruby?
 
-Using a fiber scheduler instead of a generator-like API enables a few features:
+Fibers require a scheduler to be useful. A scheduler is responsible for creating and resuming fibers. A fiber on it's own does nothing – something external to the fiber must control it. This is not unlike generators. When you iterate over a generator using `foreach`, you are using a "scheduler" to control the generator. If you write code using the `send()` or `throw()` methods of a generator, you are writing a generator scheduler. However, because generators are stack-less and can only yield from their immediate context, the author of generator has direct control over what is yielded within that generator. Fibers may suspend deep within the call stack, perhaps within library code authored by another. Therefore it makes sense to move control of the scheduler used to the point of fiber suspension, rather than at fiber creation.
+
+Additionally, using a fiber scheduler API enables a few features:
 
  * Suspension of the top-level (`{main}`): When the main fiber is suspended, execution continues into the fiber scheduler.
  * Nesting schedulers: A fiber may suspend into different fiber schedulers at various suspension points. Each scheduler will be started/suspended/resumed as needed. While a fully asynchronous app may want to ensure it does not use multiple fiber schedulers, a FPM application may find it acceptable to do so.
@@ -280,11 +282,13 @@ Switching between fibers is lightweight, requiring changing the value of approxi
 
 #### What platforms are supported?
 
-Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, i386, ARM (32 and 64-bit), PPC (32 and 64-bit), MIPS, Windows, and *nix platforms with ucontext. Support for C stack switching using assembly code is provided by Boost, which has a [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
+Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, 32- and 64-bit ARM, 32- and 64-bit PPC, MIPS, Windows, and older Posix platforms with ucontext. Support for C stack switching using assembly code is provided by [Boost](https://github.com/boostorg/context/tree/develop/src/asm), which has an [OSI-approved](https://opensource.org/licenses/BSL-1.0) [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
+
+`ext-fiber` is actively tested on [Travis](https://travis-ci.com/github/amphp/ext-fiber/builds) for x86_64 and 64-bit ARM, and on [AppVeyor](https://ci.appveyor.com/project/amphp/ext-fiber) for Windows.
 
 #### How is a `FiberScheduler` implemented?
 
-A `FiberScheduler` is like any other PHP class implementing an interface. The `run()` method may contain any necessary code to resume suspended fibers for the given application. Generally, a `FiberScheduler` would loop through available events, resuming fibers when an event occurs. The `ext-fiber` repo contains a [very simple implementation](https://github.com/amphp/ext-fiber/blob/395bf3f66805d0d41363c82be142698093ff3348/scripts/Loop.php) that is able to delay functions for a given number of milliseconds or until the scheduler is entered again. This simple implementation is used in the [`ext-fiber` phpt tests](https://github.com/amphp/ext-fiber/tree/395bf3f66805d0d41363c82be142698093ff3348/tests).
+A `FiberScheduler` is like any other PHP class implementing an interface. The `run()` method may contain any necessary code to resume suspended fibers for the given application. Generally, a `FiberScheduler` would loop through available events, resuming fibers when an event occurs. The `ext-fiber` repo contains a [very simple implementation, `Loop`](https://github.com/amphp/ext-fiber/blob/7f838e1f067e32cc08cfe79e60feef95e0748b82/scripts/Loop.php) that is able to delay functions for a given number of milliseconds or until the scheduler is entered again. This simple implementation is used in the [`ext-fiber` phpt tests](https://github.com/amphp/ext-fiber/tree/7f838e1f067e32cc08cfe79e60feef95e0748b82/tests).
 
 #### How does blocking code affect fibers
 
@@ -312,7 +316,7 @@ The API proposed here also differs, allowing suspension of the main context.
 
 ## Backward Incompatible Changes
 
-Declares `Fiber`, `FiberScheduler`, `FiberError`, `FiberExit`, and `ReflectionFiber` in the root namespace. No other BC breaks.
+Declares `Fiber`, `FiberScheduler`, `FiberError`, `FiberExit`, `ReflectionFiber`, and `ReflectionFiberScheduler` in the root namespace. No other BC breaks.
 
 ## Proposed PHP Version(s)
 
