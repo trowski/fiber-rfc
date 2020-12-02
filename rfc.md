@@ -284,9 +284,9 @@ Switching between fibers is lightweight, requiring changing the value of approxi
 
 #### What platforms are supported?
 
-Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, 32- and 64-bit ARM, 32- and 64-bit PPC, MIPS, Windows, and older Posix platforms with ucontext. Support for C stack switching using assembly code is provided by [Boost](https://github.com/boostorg/context/tree/develop/src/asm), which has an [OSI-approved](https://opensource.org/licenses/BSL-1.0) [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
+Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, 32- and 64-bit ARM, 32- and 64-bit PPC, MIPS, Windows (architecture independent, Windows provides a fiber API), and older Posix platforms with ucontext. Support for C stack switching using assembly code is provided by [Boost](https://github.com/boostorg/context/tree/develop/src/asm), which has an [OSI-approved](https://opensource.org/licenses/BSL-1.0) [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
 
-`ext-fiber` is actively tested on [Travis](https://travis-ci.com/github/amphp/ext-fiber/builds) for x86_64 and 64-bit ARM, and on [AppVeyor](https://ci.appveyor.com/project/amphp/ext-fiber) for Windows.
+`ext-fiber` is actively tested on [Travis](https://travis-ci.com/github/amphp/ext-fiber/builds) for Linux running on x86_64 and 64-bit ARM, on [AppVeyor](https://ci.appveyor.com/project/amphp/ext-fiber) for Windows, and by the developers on macOS running on x86_64.
 
 #### How is a `FiberScheduler` implemented?
 
@@ -629,6 +629,64 @@ int(3)
 Total execution time for the script is 2 seconds (2000ms) as this is the longest delay (sleep) defined. A similar synchronous script would take 5 seconds to execute as each delay would be in series rather than concurrent.
 
 While a contrived example, imagine if each of the fibers was awaiting data on a network socket or the result of a database query. Combining this with the ability to simultaneously run and suspend many fibers allows a single PHP process to concurrently await many events.
+
+----
+
+This example again uses [`Loop`](https://github.com/amphp/ext-fiber/blob/7f838e1f067e32cc08cfe79e60feef95e0748b82/scripts/Loop.php) from the prior example, this time to read and write to a socket like one of the previous examples. However, this example now waits 1 second to write to the socket to simulate network latency.
+
+``` php
+[$read, $write] = \stream_socket_pair(
+    \stripos(PHP_OS, 'win') === 0 ? STREAM_PF_INET : STREAM_PF_UNIX,
+    STREAM_SOCK_STREAM,
+    STREAM_IPPROTO_IP
+);
+
+// Set streams to non-blocking mode.
+\stream_set_blocking($read, false);
+\stream_set_blocking($write, false);
+
+$loop = new Loop;
+
+// Write data in a separate fiber after a 1 second delay.
+$fiber = Fiber::create(function () use ($loop, $write): void {
+    // Suspend fiber for 1 second.
+    echo "Waiting for 1 second...\n";
+    Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+        $loop->delay(1000, fn() => $fiber->resume());
+    }, $loop);
+
+    // Write data to the socket once it is writable.
+    echo "Writing data...\n";
+    Fiber::suspend(function (Fiber $fiber) use ($loop, $write): void {
+        $loop->write($write, 'Hello, world!', fn(int $bytes) => $fiber->resume($bytes));
+    }, $loop);
+
+    echo "Write fiber finished.\n";
+});
+
+$loop->defer(fn() => $fiber->start());
+
+echo "Waiting for data...\n";
+
+// Read data in main fiber.
+$data = Fiber::suspend(function (Fiber $fiber) use ($loop, $read): void {
+    $loop->read($read, fn(?string $data) => $fiber->resume($data));
+}, $loop);
+
+echo "Received data: ", $data, "\n";
+```
+
+The above code will output the following:
+
+```
+Waiting for data...
+Waiting for 1 second...
+Writing data...
+Write fiber finished.
+Received data: Hello, world!
+```
+
+For simplicity this example is reading and writing to the an internally connected socket, but similar code could read and write from many network sockets simultaneously.
 
 ----
 
