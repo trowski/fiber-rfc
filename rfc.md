@@ -168,7 +168,9 @@ If a `FiberScheduler` instance whose associated fiber has completed is later reu
 
 `FiberScheduler->run()` throwing an exception results in an uncaught `FiberExit` exception and exits the script.
 
-A fiber *must* be resumed from within the instance of `FiberScheduler` provided to `Fiber::suspend()`. Doing otherwise results in a fatal error. In practice this means that calling `Fiber->resume()` or `Fiber->throw()` must be within a callback registered to an event handled within a `FiberScheduler` instance. Often it is desirable to ensure resumption of a fiber is asynchronous, making it easier to reason about program state before and after an event would resume a fiber.
+A fiber *must* be resumed from within the instance of `FiberScheduler` provided to `Fiber::suspend()`. Doing otherwise results in a fatal error. In practice this means that calling `Fiber->resume()` or `Fiber->throw()` must be within a callback registered to an event handled within a `FiberScheduler` instance. Often it is desirable to ensure resumption of a fiber is asynchronous, making it easier to reason about program state before and after an event would resume a fiber. New fibers also must be started within a `FiberScheduler` (though the started fiber may use any scheduler within that fiber).
+
+Fibers must be started and resumed within a fiber scheduler in order to maintain ordering of the internal fiber stack. Internally, a fiber may only switch to a new fiber, a suspended fiber, or suspend to the prior fiber. In essense, a fiber may be pushed or popped from the stack, but execution cannot move to within the stack. The fiber scheduler acts as a hub which may branch into another fiber or suspend to the main fiber. If a fiber were to attempt to switch to a fiber that is already running, the program will crash. Checks prevent this from happening, throwing an exception into PHP instead of crashing the VM.
 
 When a script ends, each scheduler fiber created from a call to  `FiberScheduler->run()` is resumed and allowed to run to completion to complete unfinished tasks or free resources.
 
@@ -358,7 +360,7 @@ Implementation and tests at [amphp/ext-fiber](https://github.com/amphp/ext-fiber
 
 ## Examples
 
-This first example defines a very simple scheduler that is only able to defer function execution to a later time, which are then executed within the loop in `Scheduler::run()`. Nothing really useful is done here, but the example demonstrates the basics of how a fiber may be suspended and scheduled to be resumed in a scheduler (event loop) upon an event.
+First let's define a very simple `FiberScheduler` that will be used our first examples to demonstrate how fibers are suspended and resumed. This scheduler is only able to defer a function to execute a later time. These functions are executed in a loop within `Scheduler->run()`.
 
 ``` php
 class Scheduler implements FiberScheduler
@@ -366,6 +368,9 @@ class Scheduler implements FiberScheduler
     private string $nextId = 'a';
     private array $callbacks = [];
 
+	/**
+	 * Run the scheduler.
+	 */
     public function run(): void
     {
         while (!empty($this->callbacks)) {
@@ -376,29 +381,86 @@ class Scheduler implements FiberScheduler
         }
     }
 
+	/**
+	 * Enqueue a callback to executed at a later time.
+	 */
     public function defer(callable $callback): void
     {
         $this->callbacks[$this->nextId++] = $callback;
     }
 }
+```
 
+This scheduler does nothing really useful by itself, but will be used to demonstrate the basics of how a fiber may be suspended and scheduled to be resumed in a scheduler (event loop) upon an event.
+
+``` php
 $scheduler = new Scheduler;
 
-// Suspend the main fiber, which will be resumed by the scheduler.
+// This function will be executed within the current fiber before suspending.
+$enqueue = function (Fiber $fiber) use ($scheduler): void {
+    // This simple defers a function that immediately resumes the fiber.
+    // Usually a fiber will be resumed in response to an event.
+    
+    // Create an event in the fiber scheduler to resume the fiber at a later time.
+    $scheduler->defer(function () use ($fiber): void {
+        // Fibers must be resumed within FiberScheduler::run().
+        // This closure will be executed within the loop in Scheduler::run().
+        $fiber->resume("Test");
+    });
+};
+
+// Suspend the main fiber, which will be resumed later by the scheduler.
+$value = Fiber::suspend($enqueue, $scheduler);
+
+echo "After resuming main fiber: ", $value, "\n"; // Output: After resuming main fiber: Test
+```
+
+This example is expanded for clarity and comments, but may be condensed using short closures.
+
+``` php
+$scheduler = new Scheduler;
+
 $value = Fiber::suspend(fn(Fiber $fiber) => $scheduler->defer(fn() => $fiber->resume("Test")), $scheduler);
 
 echo "After resuming main fiber: ", $value, "\n"; // Output: After resuming main fiber: Test
-
-// Suspend the main fiber again, but this time an exception will be thrown.
-Fiber::suspend(fn(Fiber $fiber) => $scheduler->defer(fn() => $fiber->throw(new Exception("Test"))), $scheduler);
 ```
 
-This example produces output equivalent to the following code:
+Fibers may also be resumed by throwing an exception.
 
 ``` php
-$value = "Test";
-echo "After resuming main fiber: ", $value, "\n";
-throw new Exception("Test");
+$scheduler = new Scheduler;
+
+// This function will be executed within the current fiber before suspending.
+$enqueue = function (Fiber $fiber) use ($scheduler): void {
+    // This example instead throws an exception into the fiber to resume it.
+
+    // Create an event in the fiber scheduler to throw into the fiber at a later time.
+    $scheduler->defer(function () use ($fiber): void {
+        $fiber->throw(new Exception("Test"));
+    });
+};
+
+try {
+    // Suspend the main fiber, but this time it will be resumed with a thrown exception.
+    $value = Fiber::suspend($enqueue, $scheduler);
+    // The exception is thrown from the call to Fiber::suspend().
+} catch (Exception $exception) {
+    echo $exception->getMessage(), "\n"; // Output: Test
+}
+```
+
+Again this example may be condensed using short closures.
+
+``` php
+$scheduler = new Scheduler;
+
+try {
+    $value = Fiber::suspend(fn(Fiber $fiber) => $scheduler->defer(
+        fn() => $fiber->throw(new Exception("Test"))
+    ), $scheduler);
+} catch (Exception $exception) {
+    echo $exception->getMessage(), "\n"; // Output: Test
+}
 ```
 
 To be useful, rather than the scheduler immediately resuming the fiber, the scheduler should resume a fiber at a later time in response to an event. The next example demonstrates how a scheduler can resume a fiber in response to data becoming available on a socket.
@@ -481,6 +543,7 @@ $fiber = Fiber::create(function () use ($scheduler, $read): void {
     echo "Received data: ", $data, "\n";
 });
 
+// Start the new fiber within the fiber scheduler.
 $scheduler->defer(fn() => $fiber->start());
 
 // Suspend main fiber to enter the scheduler.
