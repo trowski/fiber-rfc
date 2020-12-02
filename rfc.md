@@ -260,62 +260,6 @@ Fibers that are not finished (do not complete execution) are destroyed similarly
 
 Each fiber is allocated a separate C stack and VM stack. The C stack is allocated using `mmap` if available, meaning physical memory is used only on demand (if it needs to be allocated to a stack value) on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with a ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
 
-## FAQ
-
-#### Who is the target audience for this feature?
-
-Fibers are an advanced feature that most users will not use directly. This feature is primarily targeted at library and framework authors to provide an event loop and an asynchronous programming API. Fibers allow integrating asynchronous code execution seamlessly into synchronous code at any point without the need to modify the application call stack or add boilerplate code.
-
-`FFI` is an example of a feature recently added to PHP that most users may not use directly, but can benefit from greatly within libraries they use.
-
-#### Why use `FiberScheduler` instead of an API similar to Lua or Ruby?
-
-Fibers require a scheduler to be useful. A scheduler is responsible for creating and resuming fibers. A fiber on it's own does nothing – something external to the fiber must control it. This is not unlike generators. When you iterate over a generator using `foreach`, you are using a "scheduler" to control the generator. If you write code using the `send()` or `throw()` methods of a generator, you are writing a generator scheduler. However, because generators are stack-less and can only yield from their immediate context, the author of generator has direct control over what is yielded within that generator. Fibers may suspend deep within the call stack, perhaps within library code authored by another. Therefore it makes sense to move control of the scheduler used to the point of fiber suspension, rather than at fiber creation.
-
-Additionally, using a fiber scheduler API enables a few features:
-
- * Suspension of the top-level (`{main}`): When the main fiber is suspended, execution continues into the fiber scheduler.
- * Nesting schedulers: A fiber may suspend into different fiber schedulers at various suspension points. Each scheduler will be started/suspended/resumed as needed. While a fully asynchronous app may want to ensure it does not use multiple fiber schedulers, a FPM application may find it acceptable to do so.
- * Elimination of boilerplate: Suspending at the top-level eliminates the need for an application to wrap code into a library-specific scheduler, allowing library code to suspend and resume as needed, without concern that the user used the appropriate boilerplate that may conflict with another libraries boilerplate.
-
-#### What about performance?
-
-Switching between fibers is lightweight, requiring changing the value of approximately 20 pointers, give or take, depending on platform. Switching context in the VM is similar to Generators. Since fibers exist within a single process thread, switching between fibers is significantly more performant than switching between processes/threads.
-
-#### What platforms are supported?
-
-Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, 32- and 64-bit ARM, 32- and 64-bit PPC, MIPS, Windows (architecture independent, Windows provides a fiber API), and older Posix platforms with ucontext. Support for C stack switching using assembly code is provided by [Boost](https://github.com/boostorg/context/tree/develop/src/asm), which has an [OSI-approved](https://opensource.org/licenses/BSL-1.0) [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
-
-`ext-fiber` is actively tested on [Travis](https://travis-ci.com/github/amphp/ext-fiber/builds) for Linux running on x86_64 and 64-bit ARM, on [AppVeyor](https://ci.appveyor.com/project/amphp/ext-fiber) for Windows, and by the developers on macOS running on x86_64.
-
-#### How is a `FiberScheduler` implemented?
-
-A `FiberScheduler` is like any other PHP class implementing an interface. The `run()` method may contain any necessary code to resume suspended fibers for the given application. Generally, a `FiberScheduler` would loop through available events, resuming fibers when an event occurs. The `ext-fiber` repo contains a [very simple implementation, `Loop`](https://github.com/amphp/ext-fiber/blob/7f838e1f067e32cc08cfe79e60feef95e0748b82/scripts/Loop.php) that is able to delay functions for a given number of milliseconds or until the scheduler is entered again. This simple implementation is used in the [`ext-fiber` phpt tests](https://github.com/amphp/ext-fiber/tree/7f838e1f067e32cc08cfe79e60feef95e0748b82/tests).
-
-#### How does blocking code affect fibers
-
-Blocking code (such as `file_get_contents()`) will continue to block the entire process, even if other fibers exist. Code must be written to use asynchonous I/O, an event loop, and fibers to see a performance and concurrency benefit. As mentioned in the introduction, several libraries already exist for asynchronous I/O and can take advantage of fibers to integrate with synchronous code while expanding the potential for concurrency in an application.
-
-#### Why add this to PHP core?
-
-Adding this capability directly in PHP core makes it widely available on any host providing PHP. Often users are not able to determine what extensions may be available in a particular hosting environment, are unsure of how to install extensions, or do not want to install 3rd-party extensions. With fibers in PHP core, any library author may use the feature without concerns for portability.
-
-Futher, the extension currently uses the observer API to determine when fiber schedulers are run to completion, however the timing is not ideal, as it occurs *before* shutdown functions and destructors are executed. Adding the fibers to PHP core would allow the engine to finish executing fiber schedulers *after* registered shutdown functions are invoked.
-
-#### Why not add an event loop and async/await API to core?
-
-This RFC proposes only the bare minimum required to allow user code to implement full-stack coroutines or green-threads in PHP. There are several frameworks that implement their own event loop API, promises, and other asynchronous APIs. These APIs vary greatly and are opinionated, designed for a particular purpose, and their particular needs may not be able to be covered by a core API that is designed by only a few individuals.
-
-It is the opinion of the author of this RFC that it is best to provide the bare minimum in core and allow user code to implement other components as they desire. If the community moves toward a single event loop API or a need emerges for an event loop in PHP core, this can be done in a future RFC. Providing a core event loop without core functionality using it (such as streams, file access, etc.) would be misleading and confusing for users. Deferring such functionality to user frameworks and providing only a minimum API in core keeps expectations in check.
-
-This RFC does not preclude adding async/await and an event loop to core, see [Future Scope](#future-scope).
-
-#### How does this proposal differ from prior Fiber proposals?
-
-The prior [Fiber RFC](https://wiki.php.net/rfc/fiber) did not support context switching within internal calls (`array_map`, `preg_replace_callback`, etc.) or opcode handlers (`foreach`, `yield from`, etc.). This could result in a crash if a function using fibers was used in any user code called from C code or in extensions that override `zend_execute_ex` such as Xdebug.
-
-The API proposed here also differs, allowing suspension of the main context.
-
 ## Backward Incompatible Changes
 
 Declares `Fiber`, `FiberScheduler`, `FiberError`, `FiberExit`, `ReflectionFiber`, and `ReflectionFiberScheduler` in the root namespace. No other BC breaks.
@@ -1026,6 +970,72 @@ $responses = await(...$promises);
 
 print ((hrtime(true) - $start) / 1_000_000) . 'ms' . PHP_EOL;
 ```
+
+## FAQ
+
+#### Who is the target audience for this feature?
+
+Fibers are an advanced feature that most users will not use directly. This feature is primarily targeted at library and framework authors to provide an event loop and an asynchronous programming API. Fibers allow integrating asynchronous code execution seamlessly into synchronous code at any point without the need to modify the application call stack or add boilerplate code.
+
+`FFI` is an example of a feature recently added to PHP that most users may not use directly, but can benefit from greatly within libraries they use.
+
+#### Why use `FiberScheduler` instead of an API similar to Lua or Ruby?
+
+Fibers require a scheduler to be useful. A scheduler is responsible for creating and resuming fibers. A fiber on it's own does nothing – something external to the fiber must control it. This is not unlike generators. When you iterate over a generator using `foreach`, you are using a "scheduler" to control the generator. If you write code using the `send()` or `throw()` methods of a generator, you are writing a generator scheduler. However, because generators are stack-less and can only yield from their immediate context, the author of generator has direct control over what is yielded within that generator. Fibers may suspend deep within the call stack, perhaps within library code authored by another. Therefore it makes sense to move control of the scheduler used to the point of fiber suspension, rather than at fiber creation.
+
+Additionally, using a fiber scheduler API enables a few features:
+
+ * Suspension of the top-level (`{main}`): When the main fiber is suspended, execution continues into the fiber scheduler.
+ * Nesting schedulers: A fiber may suspend into different fiber schedulers at various suspension points. Each scheduler will be started/suspended/resumed as needed. While a fully asynchronous app may want to ensure it does not use multiple fiber schedulers, a FPM application may find it acceptable to do so.
+ * Elimination of boilerplate: Suspending at the top-level eliminates the need for an application to wrap code into a library-specific scheduler, allowing library code to suspend and resume as needed, without concern that the user used the appropriate boilerplate that may conflict with another libraries boilerplate.
+
+#### What about performance?
+
+Switching between fibers is lightweight, requiring changing the value of approximately 20 pointers, give or take, depending on platform. Switching context in the VM is similar to Generators. Since fibers exist within a single process thread, switching between fibers is significantly more performant than switching between processes/threads.
+
+#### What platforms are supported?
+
+Fibers are supported on nearly all modern CPU architectures, including x86, x86_64, 32- and 64-bit ARM, 32- and 64-bit PPC, MIPS, Windows (architecture independent, Windows provides a fiber API), and older Posix platforms with ucontext. Support for C stack switching using assembly code is provided by [Boost](https://github.com/boostorg/context/tree/develop/src/asm), which has an [OSI-approved](https://opensource.org/licenses/BSL-1.0) [license](https://www.boost.org/LICENSE_1_0.txt) that allows components to be distributed directly with PHP.
+
+`ext-fiber` is actively tested on [Travis](https://travis-ci.com/github/amphp/ext-fiber/builds) for Linux running on x86_64 and 64-bit ARM, on [AppVeyor](https://ci.appveyor.com/project/amphp/ext-fiber) for Windows, and by the developers on macOS running on x86_64.
+
+#### How is a `FiberScheduler` implemented?
+
+A `FiberScheduler` is like any other PHP class implementing an interface. The `run()` method may contain any necessary code to resume suspended fibers for the given application. Generally, a `FiberScheduler` would loop through available events, resuming fibers when an event occurs. The `ext-fiber` repo contains a [very simple implementation, `Loop`](https://github.com/amphp/ext-fiber/blob/7f838e1f067e32cc08cfe79e60feef95e0748b82/scripts/Loop.php) that is able to delay functions for a given number of milliseconds or until the scheduler is entered again. This simple implementation is used in the [`ext-fiber` phpt tests](https://github.com/amphp/ext-fiber/tree/7f838e1f067e32cc08cfe79e60feef95e0748b82/tests).
+
+#### How does blocking code affect fibers
+
+Blocking code (such as `file_get_contents()`) will continue to block the entire process, even if other fibers exist. Code must be written to use asynchonous I/O, an event loop, and fibers to see a performance and concurrency benefit. As mentioned in the introduction, several libraries already exist for asynchronous I/O and can take advantage of fibers to integrate with synchronous code while expanding the potential for concurrency in an application.
+
+#### Why add this to PHP core?
+
+Adding this capability directly in PHP core makes it widely available on any host providing PHP. Often users are not able to determine what extensions may be available in a particular hosting environment, are unsure of how to install extensions, or do not want to install 3rd-party extensions. With fibers in PHP core, any library author may use the feature without concerns for portability.
+
+Futher, the extension currently uses the observer API to determine when fiber schedulers are run to completion, however the timing is not ideal, as it occurs *before* shutdown functions and destructors are executed. Adding the fibers to PHP core would allow the engine to finish executing fiber schedulers *after* registered shutdown functions are invoked.
+
+#### Why not add an event loop and async/await API to core?
+
+This RFC proposes only the bare minimum required to allow user code to implement full-stack coroutines or green-threads in PHP. There are several frameworks that implement their own event loop API, promises, and other asynchronous APIs. These APIs vary greatly and are opinionated, designed for a particular purpose, and their particular needs may not be able to be covered by a core API that is designed by only a few individuals.
+
+It is the opinion of the author of this RFC that it is best to provide the bare minimum in core and allow user code to implement other components as they desire. If the community moves toward a single event loop API or a need emerges for an event loop in PHP core, this can be done in a future RFC. Providing a core event loop without core functionality using it (such as streams, file access, etc.) would be misleading and confusing for users. Deferring such functionality to user frameworks and providing only a minimum API in core keeps expectations in check.
+
+This RFC does not preclude adding async/await and an event loop to core, see [Future Scope](#future-scope).
+
+#### How does this proposal differ from prior Fiber proposals?
+
+The prior [Fiber RFC](https://wiki.php.net/rfc/fiber) did not support context switching within internal calls (`array_map`, `preg_replace_callback`, etc.) or opcode handlers (`foreach`, `yield from`, etc.). This could result in a crash if a function using fibers was used in any user code called from C code or in extensions that override `zend_execute_ex` such as Xdebug.
+
+The API proposed here also differs, allowing suspension of the main context.
+
+#### Are fibers compatible with extensions, including Xdebug?
+
+Fibers do not change how the PHP VM executes PHP code and support suspending within the C stack, so fibers are compatible with PHP extensions, including those using callbacks that may call `Fiber::suspend()`.
+
+Some extensions hook into the PHP VM and therefore are of particular interest for compatibility.
+
+ * [Xdebug](https://xdebug.org) is compatible with `ext-fiber` as of a bugfix in version 3.0.1. Breakpoints may be set within fibers and inspected as usual within IDEs and debuggers such as PhpStorm. Code coverage works as expected.
+ * [pcov](https://github.com/krakjoe/pcov) generates code coverage as expected, including code executed within separate fibers.
+ * [parallel](https://github.com/krakjoe/parallel) is able to use fibers within threads.
 
 ## References 
   * [Boost C++ fibers](https://www.boost.org/doc/libs/1_67_0/libs/fiber/doc/html/index.html)
