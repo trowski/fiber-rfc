@@ -646,34 +646,29 @@ $running = false; // Stop the loop in the fiber created with defer() above.
 
 ----
 
-Since fibers can be paused during calls within the PHP VM, fibers can also be used to create asynchronous iterators. The example below again uses AMPHP v3, creating a [`Pipeline`](https://github.com/amphp/amp/blob/0f2cf561427d3d9993bf2615ae21022d40200502/lib/Pipeline.php), an iterator-like object that implements `Traversable`, allowing it to be used with `foreach` and `yield from` to iterate over an asynchronous set of values. [`PipelineSource`](https://github.com/amphp/amp/blob/0f2cf561427d3d9993bf2615ae21022d40200502/lib/PipelineSource.php) is used to emit values as they are generated. The `foreach` loop will suspend while waiting for another value from the pipeline.  The [`Delayed`](https://github.com/amphp/amp/blob/0f2cf561427d3d9993bf2615ae21022d40200502/lib/Delayed.php) object is a promise-like object that resolves itself with the second argument after the number of milliseconds given as the first argument.
+Since fibers can be paused during calls within the PHP VM, fibers can also be used to create asynchronous iterators and generators. The example below uses AMPHP v3 to suspend a fiber within a generator, awaiting resolution of a [`Delayed`](https://github.com/amphp/amp/blob/0f2cf561427d3d9993bf2615ae21022d40200502/lib/Delayed.php), a promise-like object that resolves itself with the second argument after the number of milliseconds given as the first argument. When iterating over the generator, the `foreach` loop will suspend while waiting for another value to be yielded from the generator.
 
 ``` php
 use Amp\Delayed;
-use Amp\PipelineSource;
-use function Amp\defer;
 use function Amp\await;
 
-$source = new PipelineSource;
-$pipeline = $source->pipe();
+function generator(): Generator {
+    yield await(new Delayed(500, 1));
+    yield await(new Delayed(1500, 2));
+    yield await(new Delayed(1000, 3));
+    yield await(new Delayed(2000, 4));
+    yield 5;
+    yield 6;
+    yield 7;
+    yield await(new Delayed(2000, 8));
+    yield 9;
+    yield await(new Delayed(1000, 10));
+}
 
-// defer() runs the given function in a separate fiber.
-defer(function (PipelineSource $source): void {
-    $source->yield(await(new Delayed(500, 1)));
-    $source->yield(await(new Delayed(1500, 2)));
-    $source->yield(await(new Delayed(1000, 3)));
-    $source->yield(await(new Delayed(2000, 4)));
-    $source->yield(5);
-    $source->yield(6);
-    $source->yield(7);
-    $source->yield(await(new Delayed(2000, 8)));
-    $source->yield(9);
-    $source->yield(await(new Delayed(1000, 10));
-    $source->complete();
-}, $source);
+$generator = generator();
 
-foreach ($pipeline as $value) {
-    printf("Pipeline source yielded %d\n", $value);
+foreach ($generator as $value) {
+    printf("Generator yielded %d\n", $value);
 }
 ```
 
