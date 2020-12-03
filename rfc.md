@@ -326,22 +326,23 @@ class Scheduler implements FiberScheduler
     private string $nextId = 'a';
     private array $callbacks = [];
 
-	/**
-	 * Run the scheduler.
-	 */
+    /**
+     * Run the scheduler.
+     */
     public function run(): void
     {
         while (!empty($this->callbacks)) {
-            foreach ($this->callbacks as $id => $callback) {
-                unset($this->callbacks[$id]);
+            $callbacks = $this->callbacks;
+            $this->callbacks = [];
+            foreach ($callbacks as $id => $callback) {
                 $callback();
             }
         }
     }
 
-	/**
-	 * Enqueue a callback to executed at a later time.
-	 */
+    /**
+     * Enqueue a callback to executed at a later time.
+     */
     public function defer(callable $callback): void
     {
         $this->callbacks[$this->nextId++] = $callback;
@@ -438,8 +439,9 @@ class Scheduler implements FiberScheduler
     public function run(): void
     {
         while (!empty($this->deferCallbacks) || !empty($this->read)) {
-            foreach ($this->deferCallbacks as $id => $defer) {
-                unset($this->deferCallbacks[$id]);
+            $defers = $this->deferCallbacks;
+            $this->deferCallbacks = [];
+            foreach ($defers as $id => $defer) {
                 $defer();
             }
 
@@ -1025,6 +1027,8 @@ Blocking code (such as `file_get_contents()`) will continue to block the entire 
 
 Adding this capability directly in PHP core makes it widely available on any host providing PHP. Often users are not able to determine what extensions may be available in a particular hosting environment, are unsure of how to install extensions, or do not want to install 3rd-party extensions. With fibers in PHP core, any library author may use the feature without concerns for portability.
 
+Extensions that profile code need to account for switching fibers when creating backtraces and calculating execution times. This needs to be provided as a core internal API so any profiler could support fibers. The internal API that would be provided is out of scope of this RFC as it would not affect user code.
+
 Futher, the extension currently uses the observer API to determine when fiber schedulers are run to completion, however the timing is not ideal, as it occurs *before* shutdown functions and destructors are executed. Adding the fibers to PHP core would allow the engine to finish executing fiber schedulers *after* registered shutdown functions are invoked.
 
 #### Why not add an event loop and async/await API to core?
@@ -1043,13 +1047,15 @@ The API proposed here also differs, allowing suspension of the main context.
 
 #### Are fibers compatible with extensions, including Xdebug?
 
-Fibers do not change how the PHP VM executes PHP code and support suspending within the C stack, so fibers are compatible with PHP extensions, including those using callbacks that may call `Fiber::suspend()`.
+Fibers do not change how the PHP VM executes PHP code and suspending is supported within the C stack, so fibers are compatible with PHP extensions that simply provide a bridge to a C API, including those using callbacks that may call `Fiber::suspend()`.
 
 Some extensions hook into the PHP VM and therefore are of particular interest for compatibility.
 
- * [Xdebug](https://xdebug.org) is compatible with `ext-fiber` as of a bugfix in version 3.0.1. Breakpoints may be set within fibers and inspected as usual within IDEs and debuggers such as PhpStorm. Code coverage works as expected.
+ * [Xdebug](https://xdebug.org) is compatible as of a bugfix in version 3.0.1. Breakpoints may be set within fibers and inspected as usual within IDEs and debuggers such as PhpStorm. Code coverage works as expected.
  * [pcov](https://github.com/krakjoe/pcov) generates code coverage as expected, including code executed within separate fibers.
  * [parallel](https://github.com/krakjoe/parallel) is able to use fibers within threads.
+
+As noted in ["Why add this to PHP core?"](#why-add-this-to-php-core), extensions that profile code, create backtraces, provide execution times, etc. will need to be updated to account for switching between fibers to provide correct data.
 
 ## References 
   * [Boost C++ fibers](https://www.boost.org/doc/libs/1_67_0/libs/fiber/doc/html/index.html)
