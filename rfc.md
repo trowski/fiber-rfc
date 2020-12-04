@@ -21,7 +21,7 @@ A summary of the problem described in the linked article is:
 
 For people who are familiar with using promises and await/yield to achieve writing asynchronous code, the problem can be expressed as: "Once one function returns a promise somewhere in your call stack, the entire call stack needs to return a promise because the result of the call cannot be known until the promise is resolved."
 
-This RFC seeks to eliminate the distiction between synchronous and asynchronous functions by allowing functions to be interruptible without polluting the entire call stack. This would be achieved by:
+This RFC seeks to eliminate the distinction between synchronous and asynchronous functions by allowing functions to be interruptible without polluting the entire call stack. This would be achieved by:
 
  * Adding support for [Fibers](https://en.wikipedia.org/wiki/Fiber_(computer_science)) to PHP.
  * Adding `Fiber`, `ReflectionFiber`, and `ReflectionFiberScheduler` classes, and an interface `FiberScheduler`.
@@ -993,17 +993,23 @@ print ((hrtime(true) - $start) / 1_000_000) . 'ms' . PHP_EOL;
 
 Fibers are an advanced feature that most users will not use directly. This feature is primarily targeted at library and framework authors to provide an event loop and an asynchronous programming API. Fibers allow integrating asynchronous code execution seamlessly into synchronous code at any point without the need to modify the application call stack or add boilerplate code.
 
+**Fibers are not expected to be used in application-level code. Fibers provide a basic, low-level flow-control API to create higher-level abstractions that are then used in application code.**
+
 `FFI` is an example of a feature recently added to PHP that most users may not use directly, but can benefit from greatly within libraries they use.
 
 #### Why use `FiberScheduler` instead of an API similar to Lua or Ruby?
 
-Fibers require a scheduler to be useful. A scheduler is responsible for creating and resuming fibers. A fiber on it's own does nothing – something external to the fiber must control it. This is not unlike generators. When you iterate over a generator using `foreach`, you are using a "scheduler" to control the generator. If you write code using the `send()` or `throw()` methods of a generator, you are writing a generator scheduler. However, because generators are stack-less and can only yield from their immediate context, the author of generator has direct control over what is yielded within that generator. Fibers may suspend deep within the call stack, perhaps within library code authored by another. Therefore it makes sense to move control of the scheduler used to the point of fiber suspension, rather than at fiber creation.
+Fibers require a scheduler to be useful. A scheduler is responsible for creating and resuming fibers. A fiber on it's own does nothing – something external to the fiber must control it. This is not unlike generators. When you iterate over a generator using `foreach`, you are using a "scheduler" to control the generator. If you write code using the `send()` or `throw()` methods of a generator, you are writing a generator scheduler. However, because generators are stack-less and can only yield from their immediate context, the author of generator has direct control over what is yielded within that generator.
+
+**Fibers may suspend deep within the call stack, perhaps within library code authored by another. Therefore it makes sense to move control of the scheduler used to the point of fiber suspension, rather than at fiber creation.**
 
 Additionally, using a fiber scheduler API enables a few features:
 
  * Suspension of the top-level (`{main}`): When the main fiber is suspended, execution continues into the fiber scheduler.
  * Nesting schedulers: A fiber may suspend into different fiber schedulers at various suspension points. Each scheduler will be started/suspended/resumed as needed. While a fully asynchronous app may want to ensure it does not use multiple fiber schedulers, a FPM application may find it acceptable to do so.
- * Elimination of boilerplate: Suspending at the top-level eliminates the need for an application to wrap code into a library-specific scheduler, allowing library code to suspend and resume as needed, without concern that the user used the appropriate boilerplate that may conflict with another libraries boilerplate.
+ * Elimination of boilerplate: Suspending at the top-level eliminates the need for an application to wrap code into a library-specific scheduler, allowing library code to suspend and resume as needed, without concern that the user used the appropriate scheduler that may conflict with another library's scheduler.
+
+**Any Fiber API is a low-level method of flow-control that is aimed at library and framework authors. A "simpler" API will not lead to average developers using fibers and will hurt interoperability and require more work for the average developer.**
 
 #### What about performance?
 
