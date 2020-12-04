@@ -119,7 +119,7 @@ final class Fiber
      *
      * Cannot be called within {@see FiberScheduler::run()}.
      *
-     * @param callable(Fiber):void $enqueue
+     * @param callable(Fiber, FiberScheduler):void $enqueue
      * @param FiberScheduler $scheduler
      *
      * @return mixed Value provided to {@see Fiber::resume()}.
@@ -138,7 +138,7 @@ final class Fiber
 
 A `Fiber` object is created using `Fiber::create(callable $callback)` with any callable. The callable need not call `Fiber::suspend()` directly, it may be in a deeply nested call, far down the call stack (or perhaps never call `Fiber::suspend()` at all). The returned `Fiber` may be started within a `FiberScheduler` (discussed below) using `Fiber->start(mixed ...$args)` with a variadic argument list that is provided as arguments to the callable used when creating the `Fiber`.
 
-`Fiber::suspend()` accepts a callback that is provided an instance of `Fiber` as the first argument. The `Fiber` object may be used at a later time to resume the fiber with any value or throw an exception into the fiber. The callback is invoked within the running fiber before it is suspended. The callback should create event watchers in the `FiberScheduler` instance (event loop), add the fiber to a list of pending fibers, or otherwise set up logic that will resume the fiber at a later time from the instance of `FiberScheduler` provided to `Fiber::suspend()`.
+`Fiber::suspend()` accepts a callback that is provided an instance of `Fiber` as the first argument and the instance of `FiberScheduler` given to `Fiber::suspend()` as the second argument. The `Fiber` object may be used at a later time to resume the fiber with any value or throw an exception into the fiber. The instance of `FiberScheduler` is provided as the second argument as a convenience, but is not necessarily needed in all circumstances. The callback is invoked within the running fiber before it is suspended. The callback should create event watchers in the `FiberScheduler` instance (event loop), add the fiber to a list of pending fibers, or otherwise set up logic that will resume the fiber at a later time from the instance of `FiberScheduler` provided to `Fiber::suspend()`.
 
 A suspended fiber may be resumed in one of two ways:
 
@@ -356,7 +356,7 @@ This scheduler does nothing really useful by itself, but will be used to demonst
 $scheduler = new Scheduler;
 
 // This function will be executed within the current fiber before suspending.
-$enqueue = function (Fiber $fiber) use ($scheduler): void {
+$enqueue = function (Fiber $fiber, Scheduler $scheduler): void {
     // This simple defers a function that immediately resumes the fiber.
     // Usually a fiber will be resumed in response to an event.
     
@@ -390,7 +390,7 @@ Fibers may also be resumed by throwing an exception.
 $scheduler = new Scheduler;
 
 // This function will be executed within the current fiber before suspending.
-$enqueue = function (Fiber $fiber) use ($scheduler): void {
+$enqueue = function (Fiber $fiber, Scheduler $scheduler): void {
     // This example instead throws an exception into the fiber to resume it.
 
     // Create an event in the fiber scheduler to throw into the fiber at a later time.
@@ -533,7 +533,7 @@ The next example below uses [`Loop`](https://github.com/amphp/ext-fiber/blob/7f8
 ``` php
 $loop = new Loop;
 
-$value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+$value = Fiber::suspend(function (Fiber $fiber, Loop $loop): void {
     $loop->delay(1000, fn() => $fiber->resume(1));
 }, $loop);
 
@@ -547,7 +547,7 @@ $loop = new Loop;
 
 // Create three new fibers and run them in the FiberScheduler.
 $fiber = Fiber::create(function () use ($loop): void {
-    $value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+    $value = Fiber::suspend(function (Fiber $fiber, Loop $loop): void {
         $loop->delay(1500, fn() => $fiber->resume(1));
     }, $loop);
     var_dump($value);
@@ -555,7 +555,7 @@ $fiber = Fiber::create(function () use ($loop): void {
 $loop->defer(fn() => $fiber->start());
 
 $fiber = Fiber::create(function () use ($loop): void {
-    $value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+    $value = Fiber::suspend(function (Fiber $fiber, Loop $loop): void {
         $loop->delay(1000, fn() => $fiber->resume(2));
     }, $loop);
     var_dump($value);
@@ -563,7 +563,7 @@ $fiber = Fiber::create(function () use ($loop): void {
 $loop->defer(fn() => $fiber->start());
 
 $fiber = Fiber::create(function () use ($loop): void {
-    $value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+    $value = Fiber::suspend(function (Fiber $fiber, Loop $loop): void {
         $loop->delay(2000, fn() => $fiber->resume(3));
     }, $loop);
     var_dump($value);
@@ -571,7 +571,7 @@ $fiber = Fiber::create(function () use ($loop): void {
 $loop->defer(fn() => $fiber->start());
 
 // Suspend the main thread to enter the FiberScheduler.
-$value = Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+$value = Fiber::suspend(function (Fiber $fiber, Loop $loop): void {
     $loop->delay(500, fn() => $fiber->resume(4));
 }, $loop);
 var_dump($value);
@@ -611,13 +611,13 @@ $loop = new Loop;
 $fiber = Fiber::create(function () use ($loop, $write): void {
     // Suspend fiber for 1 second.
     echo "Waiting for 1 second...\n";
-    Fiber::suspend(function (Fiber $fiber) use ($loop): void {
+    Fiber::suspend(function (Fiber $fiber, Loop $loop): void {
         $loop->delay(1000, fn() => $fiber->resume());
     }, $loop);
 
     // Write data to the socket once it is writable.
     echo "Writing data...\n";
-    Fiber::suspend(function (Fiber $fiber) use ($loop, $write): void {
+    Fiber::suspend(function (Fiber $fiber, Loop $loop) use ($write): void {
         $loop->write($write, 'Hello, world!', fn(int $bytes) => $fiber->resume($bytes));
     }, $loop);
 
@@ -629,7 +629,7 @@ $loop->defer(fn() => $fiber->start());
 echo "Waiting for data...\n";
 
 // Read data in main fiber.
-$data = Fiber::suspend(function (Fiber $fiber) use ($loop, $read): void {
+$data = Fiber::suspend(function (Fiber $fiber, Loop $loop) use ($read): void {
     $loop->read($read, fn(?string $data) => $fiber->resume($data));
 }, $loop);
 
@@ -1066,5 +1066,5 @@ As noted in ["Why add this to PHP core?"](#why-add-this-to-php-core), extensions
 ## References 
   * [Boost C++ fibers](https://www.boost.org/doc/libs/1_67_0/libs/fiber/doc/html/index.html)
   * [Ruby Fibers](https://ruby-doc.org/core-2.5.0/Fiber.html)
-  * [Lua Fibers](https://wingolog.org/archives/2018/05/16/lightweight-concurrency-in-lua)
+  * [Lua Fibers](https://www.lua.org/pil/9.1.html)
   * [Project Loom for Java](https://cr.openjdk.java.net/~rpressler/loom/Loom-Proposal.html)
