@@ -295,7 +295,7 @@ PHP 8.1
 
 **suspend (** *variable* **to** *expression* **) {** *statement(s)* **}**
 
-Below is an example usage inside of the proposed API in an object method, where the current `Fiber` instance is added to an array before suspending, returning the value that resumes the fiber.
+Below is an example usage of the proposed API inside an object method, where the current `Fiber` instance is added to an array before suspending, returning the value that resumes the fiber.
 
 ``` php
 $this->waiting[$position] = Fiber::this();
@@ -1036,7 +1036,7 @@ Fibers are an advanced feature that most users will not use directly. This featu
 
 #### Why use `FiberScheduler` instead of an API similar to Lua or Ruby?
 
-Fibers require a scheduler to be useful. A scheduler is responsible for creating and resuming fibers. A fiber on it's own does nothing – something external to the fiber must control it. This is not unlike generators. When you iterate over a generator using `foreach`, you are using a "scheduler" to control the generator. If you write code using the `send()` or `throw()` methods of a generator, you are writing a generator scheduler. However, because generators are stack-less and can only yield from their immediate context, the author of generator has direct control over what is yielded within that generator.
+Fibers require a scheduler to be useful. A scheduler is responsible for creating and resuming fibers. A fiber on it's own does nothing – something external to the fiber must control it. This is not unlike generators. When you iterate over a generator using `foreach`, you are using a "scheduler" to control the generator. If you write code using the `send()` or `throw()` methods of a generator, you are writing a generator scheduler. However, because generators are stack-less and can only yield from their immediate context, the author of a generator has direct control over what is yielded within that generator.
 
 **Fibers may suspend deep within the call stack, usually within library code authored by another. Therefore it makes sense to move control of the scheduler used to the point of fiber suspension, rather than at fiber creation.**
 
@@ -1050,7 +1050,7 @@ Additionally, using a fiber scheduler API enables a few features:
 
 #### What about performance?
 
-Switching between fibers is lightweight, requiring changing the value of approximately 20 pointers, give or take, depending on platform. Switching context in the VM is similar to Generators. Since fibers exist within a single process thread, switching between fibers is significantly more performant than switching between processes/threads.
+Switching between fibers is lightweight, requiring changing the value of approximately 20 pointers, give or take, depending on platform. Switching execution context in the PHP VM is similar to Generators, again only requiring the swapping of a few pointers. Since fibers exist within a single process thread, switching between fibers is significantly more performant than switching between processes or threads.
 
 #### What platforms are supported?
 
