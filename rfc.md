@@ -526,7 +526,7 @@ $fiber = Fiber::create(function () use ($scheduler, $read): void {
     $scheduler->read($read, fn() => $fiber->resume());
     Fiber::suspend($scheduler);
 
-    $data = \fread($read, 8192);
+    $data = fread($read, 8192);
 
     echo "Received data: ", $data, "\n";
 });
@@ -540,7 +540,7 @@ $scheduler->defer(fn() => $fiber->resume("Writing data...\n"));
 echo Fiber::suspend($scheduler);
 
 // Write data in main thread once it is resumed.
-\fwrite($write, "Hello, world!");
+fwrite($write, "Hello, world!");
 ```
 
 This script will output the following:
@@ -790,6 +790,9 @@ function generator(): Generator {
 foreach (generator() as $value) {
     printf("Generator yielded %d\n", $value);
 }
+
+// Argument unpacking also can use a suspending generator.
+var_dump(...generator());
 ```
 
 ----
