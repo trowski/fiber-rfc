@@ -1,7 +1,7 @@
 # PHP RFC: Fibers 
 
   * Date: 2020-12-06
-  * Author: Aaron Piotrowski <trowski@php.net>
+  * Authors: Aaron Piotrowski <trowski@php.net>, Niklas Keller <kelunik@php.net>
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/fibers
 
@@ -24,7 +24,7 @@ For people who are familiar with using promises and await/yield to achieve writi
 This RFC seeks to eliminate the distinction between synchronous and asynchronous functions by allowing functions to be interruptible without polluting the entire call stack. This would be achieved by:
 
  * Adding support for [Fibers](https://en.wikipedia.org/wiki/Fiber_(computer_science)) to PHP.
- * Adding `Fiber`, `ReflectionFiber`, and `ReflectionFiberScheduler` classes, and an interface `FiberScheduler`.
+ * Adding `Fiber`, `FiberScheduler`, and the corresponding reflection classes `ReflectionFiber` and `ReflectionFiberScheduler`.
  * Adding exception classes `FiberError` and `FiberExit` to represent errors.
 
 ### Definition of terms
@@ -33,9 +33,9 @@ To allow better understanding of the RFC, this section defines what the names Fi
 
 #### Fibers
 
-Fibers allow you to create full-stack, interruptible functions that can be used to implement cooperative concurrency in PHP. These are also known as coroutines or green-threads.
+Fibers allow to create full-stack, interruptible functions that can be used to implement cooperative multitasking in PHP. These are also known as coroutines or green-threads.
 
-Unlike stack-less Generators, each Fiber contains a call stack, allowing them to be paused within deeply nested function calls. A function declaring an interruption point (i.e., calling `Fiber::suspend()`) need not change its return type, unlike a function using `yield` which must return a `Generator` instance.
+Unlike stack-less Generators, each Fiber has its own call stack, allowing them to be paused within deeply nested function calls. A function declaring an interruption point (i.e., calling `Fiber::suspend()`) need not change its return type, unlike a function using `yield` which must return a `Generator` instance.
 
 Fibers pause the entire execution stack, so the direct caller of the function does not need to change how it invokes the function.
 
@@ -132,7 +132,9 @@ final class Fiber
     public static function this(): Fiber { }
 
     /**
-     * Suspend execution of the fiber. The fiber may be resumed with {@see Fiber::resume()} or {@see Fiber::throw()}
+     * Suspend execution of the fiber switching to the scheduler.
+     *
+     * The fiber may be resumed with {@see Fiber::resume()} or {@see Fiber::throw()}
      * within the run() method of the instance of {@see FiberScheduler} given.
      *
      * Cannot be called within {@see FiberScheduler::run()}.
@@ -155,7 +157,7 @@ final class Fiber
 
 A `Fiber` object is created using `Fiber::create(callable $callback)` with any callable. The callable need not call `Fiber::suspend()` directly, it may be in a deeply nested call, far down the call stack (or perhaps never call `Fiber::suspend()` at all). The returned `Fiber` may be started within a `FiberScheduler` (discussed below) using `Fiber->start(mixed ...$args)` with a variadic argument list that is provided as arguments to the callable used when creating the `Fiber`.
 
-`Fiber::suspend()` suspends (switches) execution of the current fiber to a scheduler fiber created from the instance of `FiberScheduler` given. This will be discussed in further detail in the next section describing `FiberScheduler`.
+`Fiber::suspend()` suspends execution of the current fiber and switches to a scheduler fiber created from the instance of `FiberScheduler` given. This will be discussed in further detail in the next section describing `FiberScheduler`.
 
 `Fiber::this()` returns the currently executing `Fiber` instance. This object may be stored to be used at a later time to resume the fiber with any value or throw an exception into the fiber. The `Fiber` object should be attached to event watchers in the `FiberScheduler` instance (event loop), added to a list of pending fibers, or otherwise used to set up logic that will resume the fiber at a later time from the instance of `FiberScheduler` provided to `Fiber::suspend()`.
 
