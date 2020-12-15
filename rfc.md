@@ -191,7 +191,7 @@ A fiber *must* be resumed from within the instance of `FiberScheduler` provided 
 
 Fibers must be started and resumed within a fiber scheduler in order to maintain ordering of the internal fiber stack. Internally, a fiber may only switch to a new fiber, a suspended fiber, or suspend to the prior fiber. In essense, a fiber may be pushed or popped from the stack, but execution cannot move to within the stack. The fiber scheduler acts as a hub which may branch into another fiber or suspend to the main fiber. If a fiber were to attempt to switch to a fiber that is already running, the program will crash. Checks prevent this from happening, throwing an exception into PHP instead of crashing the VM.
 
-When a script ends, each scheduler fiber created from a call to  `FiberScheduler->run()` is resumed and allowed to run to completion to complete unfinished tasks or free resources.
+When a script ends, each scheduler fiber created from a call to `FiberScheduler->run()` is resumed and allowed to run to completion to complete unfinished tasks or free resources.
 
 This RFC does not include an implementation for `FiberScheduler`. Instead, it proposes only defining an interface and any implementation would be done in user code (see [Future Scope](#future-scope)).
 
@@ -267,7 +267,7 @@ class ReflectionFiberScheduler extends ReflectionFiber
     /**
      * @return FiberScheduler The instance used to create the fiber.
      */
-    public function getFiberScheduler(): FiberScheduler { }
+    public function getScheduler(): FiberScheduler { }
 }
 ```
 
@@ -277,7 +277,7 @@ Fibers that are not finished (do not complete execution) are destroyed similarly
 
 #### Fiber Stacks
 
-Each fiber is allocated a separate C stack and VM stack. The C stack is allocated using `mmap` if available, meaning physical memory is used only on demand (if it needs to be allocated to a stack value) on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with a ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
+Each fiber is allocated a separate C stack and VM stack. The C stack is allocated using `mmap` if available, meaning physical memory is used only on demand (if it needs to be allocated to a stack value) on most platforms. Each fiber stack is allocated 1M maximum of memory by default, settable with an ini setting `fiber.stack_size`. Note that this memory is used for the C stack and is not related to the memory available to PHP code. VM stacks for each fiber are allocated in a similar way to generators and use a similar amount of memory and CPU.
 
 ## Backward Incompatible Changes
 
@@ -312,7 +312,7 @@ return suspend ($fiber to $scheduler) {
 
 #### async/await keywords
 
-Using an internally defined `FiberScheduler` and an additionally defined `Awaitable` object, `Fiber::suspend()` could be replaced with the keyword `await` and new fibers could be created using the keyword `async`. The usage of `async` differs slightly from languages such as JS or Hack. `async` is not used to declare asynchronous functions, rather it is used at call time to modify the call to any function or method to return an awaitable and start a new fiber (green-thread).
+Using an internally defined `FiberScheduler` and an additionally defined `Awaitable` object, `Fiber::suspend()` could be replaced with the keyword `await` and new fibers could be created using the keyword `async`. The usage of `async` differs slightly from languages such as JS or Hack. `async` is not used to declare asynchronous functions, rather it is used at call time to modify the call to any function or method to return an awaitable and start a new fiber.
 
 An `Awaitable` would act like a promise, representing the future result of the fiber created with `async`.
 
@@ -344,12 +344,11 @@ Implementation and tests at [amphp/ext-fiber](https://github.com/amphp/ext-fiber
 
 ## Examples
 
-First let's define a very simple `FiberScheduler` that will be used our first examples to demonstrate how fibers are suspended and resumed. This scheduler is only able to defer a function to execute a later time. These functions are executed in a loop within `Scheduler->run()`.
+First let's define a very simple `FiberScheduler` that will be used by our first examples to demonstrate how fibers are suspended and resumed. This scheduler is only able to defer a function to execute at a later time. These functions are executed in a loop within `Scheduler->run()`.
 
 ``` php
 class Scheduler implements FiberScheduler
 {
-    private string $nextId = 'a';
     private array $callbacks = [];
 
     /**
@@ -371,7 +370,7 @@ class Scheduler implements FiberScheduler
      */
     public function defer(callable $callback): void
     {
-        $this->callbacks[$this->nextId++] = $callback;
+        $this->callbacks[] = $callback;
     }
 }
 ```
@@ -561,7 +560,7 @@ Below is a chart illustrating execution flow between the three fibers in this ex
 
 ----
 
-The next example below uses [`Loop`](https://github.com/amphp/ext-fiber/blob/7f838e1f067e32cc08cfe79e60feef95e0748b82/scripts/Loop.php), a simple implemenation of `FiberScheduler`, yet more complex than that in the above examples, to delay execution of a function for 1000 milliseconds. When the fiber is suspended with `Fiber::suspend()`, resumption of the fiber is scheduled with  `Loop->delay()`, which invokes the callback after the given number of milliseconds.
+The next example below uses [`Loop`](https://github.com/amphp/ext-fiber/blob/7f838e1f067e32cc08cfe79e60feef95e0748b82/scripts/Loop.php), a simple implemenation of `FiberScheduler`, yet more complex than that in the above examples, to delay execution of a function for 1000 milliseconds. When the fiber is suspended with `Fiber::suspend()`, resumption of the fiber is scheduled with `Loop->delay()`, which invokes the callback after the given number of milliseconds.
 
 ``` php
 $loop = new Loop;
@@ -676,7 +675,7 @@ Wrote 13 bytes.
 Received data: Hello, world!
 ```
 
-For simplicity this example is reading and writing to the an internally connected socket, but similar code could read and write from many network sockets simultaneously.
+For simplicity this example is reading and writing to an internally connected socket, but similar code could read and write from many network sockets simultaneously.
 
 ----
 
@@ -1049,7 +1048,7 @@ Additionally, using a fiber scheduler API enables a few features:
  * Nesting schedulers: A fiber may suspend into different fiber schedulers at various suspension points. Each scheduler will be started/suspended/resumed as needed. While a fully asynchronous app may want to ensure it does not use multiple fiber schedulers, a FPM application may find it acceptable to do so.
  * Elimination of boilerplate: Suspending at the top-level eliminates the need for an application to wrap code into a library-specific scheduler, allowing library code to suspend and resume as needed, without concern that the user used the appropriate scheduler that may conflict with another library's scheduler.
 
-**The Fiber API is a low-level method of flow-control that is aimed at library and framework authors. A "simpler" API will not lead to average developers using fibers and will hurt interoperability and require more work and complexity for the average developer to use any library using fibers.**
+**The Fiber API is a low-level method of flow-control that is aimed at library and framework authors. A "simpler" API will not lead to average developers using fibers, will hurt interoperability, and require more work and complexity for the average developer to use any library using fibers.**
 
 #### What about performance?
 
@@ -1069,6 +1068,8 @@ A `FiberScheduler` is like any other PHP class implementing an interface. The `r
 
 Blocking code (such as `file_get_contents()`) will continue to block the entire process, even if other fibers exist. Code must be written to use asynchonous I/O, an event loop, and fibers to see a performance and concurrency benefit. As mentioned in the introduction, several libraries already exist for asynchronous I/O and can take advantage of fibers to integrate with synchronous code while expanding the potential for concurrency in an application.
 
+As fibers allow transparent use of asynchronous I/O, blocking implementations can be replaced by non-blocking implementations without affecting the entire call stack. If an internal scheduler is available in the future, internal functions such as `sleep()` could be made non-blocking by default.
+
 #### Why add this to PHP core?
 
 Adding this capability directly in PHP core makes it widely available on any host providing PHP. Often users are not able to determine what extensions may be available in a particular hosting environment, are unsure of how to install extensions, or do not want to install 3rd-party extensions. With fibers in PHP core, any library author may use the feature without concerns for portability.
@@ -1081,7 +1082,7 @@ Futher, the extension currently uses the observer API to determine when fiber sc
 
 This RFC proposes only the bare minimum required to allow user code to implement full-stack coroutines or green-threads in PHP. There are several frameworks that implement their own event loop API, promises, and other asynchronous APIs. These APIs vary greatly and are opinionated, designed for a particular purpose, and their particular needs may not be able to be covered by a core API that is designed by only a few individuals.
 
-It is the opinion of the author of this RFC that it is best to provide the bare minimum in core and allow user code to implement other components as they desire. If the community moves toward a single event loop API or a need emerges for an event loop in PHP core, this can be done in a future RFC. Providing a core event loop without core functionality using it (such as streams, file access, etc.) would be misleading and confusing for users. Deferring such functionality to user frameworks and providing only a minimum API in core keeps expectations in check.
+It is the opinion of the authors of this RFC that it is best to provide the bare minimum in core and allow user code to implement other components as they desire. If the community moves toward a single event loop API or a need emerges for an event loop in PHP core, this can be done in a future RFC. Providing a core event loop without core functionality using it (such as streams, file access, etc.) would be misleading and confusing for users. Deferring such functionality to user frameworks and providing only a minimum API in core keeps expectations in check.
 
 This RFC does not preclude adding async/await and an event loop to core, see [Future Scope](#future-scope).
 
